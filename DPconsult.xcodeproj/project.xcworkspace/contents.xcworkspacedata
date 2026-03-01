@@ -4,4 +4,16 @@
    <FileRef
       location = "self:">
    </FileRef>
+   <FileRef
+      location = "group:DPBookkeepingView.swift">
+   </FileRef>
+   <FileRef
+      location = "group:DPBookkeepingView 2.swift">
+   </FileRef>
+   <FileRef
+      location = "group:DPBookkeepingView 3.swift">
+   </FileRef>
+   <FileRef
+      location = "group:DPBookkeepingView 4.swift">
+   </FileRef>
 </Workspace>

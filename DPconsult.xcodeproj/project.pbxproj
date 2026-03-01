@@ -6,6 +6,11 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		FDA8868F2F2E91270095A3C5 /* BKReportsPDF.swift in Sources */ = {isa = PBXBuildFile; fileRef = FDA8868E2F2E91270095A3C5 /* BKReportsPDF.swift */; };
+		FDA886912F2EBB450095A3C5 /* ActivityView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FDA886902F2EBB450095A3C5 /* ActivityView.swift */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		FD7AA2EF2E6EA0080025EAAB /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -27,11 +32,26 @@
 		FD7AA2E12E6EA0060025EAAB /* DPconsult.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = DPconsult.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		FD7AA2EE2E6EA0080025EAAB /* DPconsultTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DPconsultTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		FD7AA2F82E6EA0080025EAAB /* DPconsultUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DPconsultUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		FDA8868E2F2E91270095A3C5 /* BKReportsPDF.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BKReportsPDF.swift; sourceTree = "<group>"; };
+		FDA886902F2EBB450095A3C5 /* ActivityView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivityView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		FD2C9E362F53903900A387C3 /* Exceptions for "DPconsult" folder in "DPconsult" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = FD7AA2E02E6EA0060025EAAB /* DPconsult */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		FD7AA2E32E6EA0060025EAAB /* DPconsult */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				FD2C9E362F53903900A387C3 /* Exceptions for "DPconsult" folder in "DPconsult" target */,
+			);
 			path = DPconsult;
 			sourceTree = "<group>";
 		};
@@ -79,6 +99,8 @@
 				FD7AA2F12E6EA0080025EAAB /* DPconsultTests */,
 				FD7AA2FB2E6EA0080025EAAB /* DPconsultUITests */,
 				FD7AA2E22E6EA0060025EAAB /* Products */,
+				FDA8868E2F2E91270095A3C5 /* BKReportsPDF.swift */,
+				FDA886902F2EBB450095A3C5 /* ActivityView.swift */,
 			);
 			sourceTree = "<group>";
 		};
@@ -111,8 +133,6 @@
 				FD7AA2E32E6EA0060025EAAB /* DPconsult */,
 			);
 			name = DPconsult;
-			packageProductDependencies = (
-			);
 			productName = DPconsult;
 			productReference = FD7AA2E12E6EA0060025EAAB /* DPconsult.app */;
 			productType = "com.apple.product-type.application";
@@ -171,7 +191,7 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 1640;
-				LastUpgradeCheck = 1640;
+				LastUpgradeCheck = 2600;
 				TargetAttributes = {
 					FD7AA2E02E6EA0060025EAAB = {
 						CreatedOnToolsVersion = 16.4;
@@ -236,6 +256,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				FDA8868F2F2E91270095A3C5 /* BKReportsPDF.swift in Sources */,
+				FDA886912F2EBB450095A3C5 /* ActivityView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -328,6 +350,7 @@
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 			};
@@ -385,6 +408,7 @@
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				VALIDATE_PRODUCT = YES;
 			};
@@ -395,14 +419,18 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = DPconsult/DPconsult.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = HG28HDKB7S;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = DPconsult/Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UIBackgroundModes = "remote-notification";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UIRequiresFullScreen = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -412,6 +440,8 @@
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.dan.DPconsult;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -423,14 +453,18 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = DPconsult/DPconsult.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = HG28HDKB7S;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = DPconsult/Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UIBackgroundModes = "remote-notification";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UIRequiresFullScreen = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -440,6 +474,8 @@
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.dan.DPconsult;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";

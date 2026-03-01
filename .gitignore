@@ -1,0 +1,20 @@
+# Sensitive keys
+AuthKey_*.p8
+GoogleService-Info.plist
+
+# Xcode user data
+xcuserdata/
+*.xcuserdatad/
+xcdebugger/
+
+# Build
+DerivedData/
+build/
+
+# macOS
+.DS_Store
+
+# Website Backup
+Website Backup/
+Website/
+dp-cloudkit-proxy/
