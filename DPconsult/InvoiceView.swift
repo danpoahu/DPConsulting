@@ -105,6 +105,10 @@ struct DPInvoicingView: View {
     @State private var editingIndex: Int? = nil
     @State private var showLineEditor = false
 
+    @State private var showingInvoiceMailComposer = false
+    @State private var invoiceMailRecipient: String = ""
+    @State private var invoiceMailAttachments: [URL] = []
+
     private var customerIdBinding: Binding<UUID?> {
         Binding(
             get: { self.selectedCustomer?.id },
@@ -184,8 +188,8 @@ struct DPInvoicingView: View {
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button { regeneratePDFOnly() } label: { Image(systemName: "doc.richtext") }
-                        .disabled(selectedCustomer == nil || items.isEmpty)
+                    Button { emailCurrentInvoice() } label: { Image(systemName: "envelope") }
+                        .disabled(selectedCustomer == nil || items.isEmpty || (selectedCustomer?.email ?? "").isEmpty)
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {
@@ -217,6 +221,20 @@ struct DPInvoicingView: View {
                         .presentationSizing(.form)
                 }
             }
+            #if !targetEnvironment(macCatalyst)
+            .sheet(isPresented: $showingInvoiceMailComposer) {
+                if !invoiceMailAttachments.isEmpty {
+                    MailComposerView(
+                        recipients: splitEmailRecipients(invoiceMailRecipient),
+                        subject: invoiceEmailSubject(),
+                        body: invoiceEmailBody(),
+                        attachments: invoiceMailAttachments,
+                        bcc: ["dan@oahuappdesign.com"]
+                    )
+                    .presentationSizing(.form)
+                }
+            }
+            #endif
             .onAppear {
                 settings = loadOrCreateSettings(context: modelContext)
                 prefillIfNeeded()
@@ -317,6 +335,7 @@ struct DPInvoicingView: View {
             return
         }
         guard let inv = existing else { return }
+        inv.cleanseInvalidatedItems()
         status = Status.from(inv.status)
         issueDate = inv.issueDate
         dueDate = inv.dueDate
@@ -599,6 +618,83 @@ struct DPInvoicingView: View {
             pop.permittedArrowDirections = []
         }
         root.present(avc, animated: true)
+    }
+
+    // MARK: - Mac Mail Helper (mirrors DPARStatementView pattern)
+
+    #if targetEnvironment(macCatalyst)
+    private func openMailOnMac(to recipients: [String], subject: String, body: String, attachments: [URL]) {
+        let joined = recipients.joined(separator: ",")
+        var components = URLComponents(string: "mailto:\(joined)")
+        components?.queryItems = [
+            URLQueryItem(name: "subject", value: subject),
+            URLQueryItem(name: "body", value: body)
+        ]
+        if let url = components?.url {
+            UIApplication.shared.open(url)
+        }
+        if !attachments.isEmpty {
+            presentShare(for: attachments[0])
+        }
+    }
+    #endif
+
+    // MARK: - Email Invoice
+
+    private func invoiceEmailSubject() -> String {
+        let num = savedNumber > 0 ? savedNumber : (savedInvoice?.invoiceNumber ?? 0)
+        let label = status == .draft ? "Quote" : "Invoice"
+        return "\(label) #\(num) from DP Consulting"
+    }
+
+    private func invoiceEmailBody() -> String {
+        let s = settings ?? loadOrCreateSettings(context: modelContext)
+        let name = selectedCustomer?.name.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let firstName = name.components(separatedBy: " ").first ?? name
+        let greeting = firstName.isEmpty ? "Hello," : "Hi \(firstName),"
+        let num = savedNumber > 0 ? savedNumber : (savedInvoice?.invoiceNumber ?? 0)
+        let label = status == .draft ? "quote" : "invoice"
+        return """
+        \(greeting)
+
+        Attached is \(label) #\(num). Thank you!
+
+        Dan
+        \(s.name)
+        """
+    }
+
+    private func emailCurrentInvoice() {
+        guard let customer = selectedCustomer, !customer.email.isEmpty else { return }
+        let s = settings ?? loadOrCreateSettings(context: modelContext)
+
+        guard let pdfURL = try? generatePDFURL(
+            customer: customer,
+            settings: s,
+            isQuote: status == .draft,
+            numberOverride: savedNumber == 0 ? nil : savedNumber
+        ) else {
+            error = "Failed to generate PDF for email."
+            return
+        }
+
+        invoiceMailRecipient = customer.email
+        invoiceMailAttachments = [pdfURL]
+
+        #if !targetEnvironment(macCatalyst)
+        if MFMailComposeViewController.canSendMail() {
+            showingInvoiceMailComposer = true
+        } else {
+            presentShare(for: pdfURL)
+        }
+        #else
+        openMailOnMac(
+            to: splitEmailRecipients(customer.email),
+            subject: invoiceEmailSubject(),
+            body: invoiceEmailBody(),
+            attachments: [pdfURL]
+        )
+        #endif
     }
 
     private func generatePDFURL(customer: SDCustomer, settings: SDCompanySettings, isQuote: Bool, numberOverride: Int?) throws -> URL {

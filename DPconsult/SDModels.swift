@@ -78,6 +78,8 @@ final class SDInvoice {
     var tax: Double = 0
     var total: Double = 0
     var amountPaid: Double = 0
+    var journalPosted: Bool = false
+    var lastPostedPayment: Double = 0
     var createdAt: Date = Date()
     var updatedAt: Date = Date()
 
@@ -104,7 +106,15 @@ final class SDInvoice {
     }
 
     var sortedItems: [SDInvoiceItem] {
-        (items ?? []).sorted { $0.sortOrder < $1.sortOrder }
+        (items ?? [])
+            .filter { $0.modelContext != nil }
+            .sorted { $0.sortOrder < $1.sortOrder }
+    }
+
+    /// Removes any invalidated (tombstoned) item references from the persisted items array.
+    /// Call this before accessing sortedItems to prevent stale-reference crashes.
+    func cleanseInvalidatedItems() {
+        items = (items ?? []).filter { $0.modelContext != nil }
     }
 
     init(invoiceNumber: Int, status: String = "draft", customer: SDCustomer? = nil,
