@@ -67,16 +67,16 @@ enum DPInvoicePDF {
         let h1    = UIFont.systemFont(ofSize: 28, weight: .bold)
         let h2    = UIFont.systemFont(ofSize: 16, weight: .semibold)
         let h3    = UIFont.systemFont(ofSize: 14, weight: .semibold)
-        let body  = UIFont.systemFont(ofSize: 12)
+        let body  = UIFont.systemFont(ofSize: 10.5)
         let small = UIFont.systemFont(ofSize: 10)
-        let italic = UIFont.italicSystemFont(ofSize: 11)
+        let italic = UIFont.italicSystemFont(ofSize: 9.5)
 
         // Table column positions
         let qtyX  = margin
         let descX = margin + CGFloat(60)
         let rateX = page.width - margin - CGFloat(160)
         let amtX  = page.width - margin - CGFloat(70)
-        let descWidth = page.width - margin*2 - CGFloat(60) - CGFloat(240)
+        let descWidth = page.width - margin*2 - CGFloat(60) - CGFloat(175)
         let headerH: CGFloat = 22
 
         // Drawing helpers
