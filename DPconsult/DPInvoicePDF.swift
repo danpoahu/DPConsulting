@@ -96,8 +96,10 @@ enum DPInvoicePDF {
             let attrs: [NSAttributedString.Key: Any] = [.font: font, .paragraphStyle: para, .foregroundColor: color]
             let rect = CGRect(x: at.x, y: at.y, width: width, height: .greatestFiniteMagnitude)
             let size = (text as NSString).boundingRect(with: rect.size, options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: attrs, context: nil).size
-            (text as NSString).draw(in: CGRect(x: at.x, y: at.y, width: width, height: size.height), withAttributes: attrs)
-            return ceil(size.height)
+            // Generous tail buffer so sub-pixel rounding + font-leading variance never clips the last line.
+            let drawH = ceil(size.height) + CGFloat(font.lineHeight * 0.5)
+            (text as NSString).draw(in: CGRect(x: at.x, y: at.y, width: width, height: drawH), withAttributes: attrs)
+            return drawH
         }
 
         @discardableResult
@@ -117,13 +119,18 @@ enum DPInvoicePDF {
         }
 
         func measureText(_ text: String, width: CGFloat, font: UIFont) -> CGFloat {
-            let para = NSMutableParagraphStyle(); para.lineBreakMode = .byWordWrapping
+            // Mirror drawMultiline's paragraph style + tail buffer so row-height predictions
+            // match what gets actually drawn (otherwise the last line of multiline text clips).
+            let para = NSMutableParagraphStyle()
+            para.lineBreakMode = .byWordWrapping
+            para.lineSpacing = 1.35
             let attrs: [NSAttributedString.Key: Any] = [.font: font, .paragraphStyle: para]
             let size = (text as NSString).boundingRect(
                 with: CGSize(width: width, height: .greatestFiniteMagnitude),
                 options: [.usesLineFragmentOrigin, .usesFontLeading],
                 attributes: attrs, context: nil).size
-            return ceil(max(size.height, 16))
+            let buffered = ceil(size.height) + CGFloat(font.lineHeight * 0.5)
+            return max(buffered, 16)
         }
 
         // Draws a wobbly highlighter-pen-style fill instead of a perfect rectangle.
