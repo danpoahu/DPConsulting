@@ -126,6 +126,51 @@ enum DPInvoicePDF {
             return ceil(max(size.height, 16))
         }
 
+        // Draws a wobbly highlighter-pen-style fill instead of a perfect rectangle.
+        // Top and bottom edges wave slightly; left/right ends overshoot the rect a touch
+        // so the mark reads as a hand-drawn stroke. Seeded from the rect's position so the
+        // same invoice renders the same wobble every time (no flicker on re-export).
+        func drawHighlighterStroke(in g: CGContext, rect: CGRect, color: UIColor) {
+            var seed: UInt64 = UInt64(bitPattern: Int64(rect.minX.rounded() * 73))
+                          &+ UInt64(bitPattern: Int64(rect.minY.rounded() * 131))
+                          &+ 97
+            func nextUnit() -> CGFloat {
+                seed = seed &* 6364136223846793005 &+ 1442695040888963407
+                return CGFloat((seed >> 32) & 0xFFFF) / 65535.0
+            }
+            func wobble(_ amt: CGFloat) -> CGFloat { (nextUnit() - 0.5) * 2 * amt }
+
+            let segments = 14
+            let yWobble: CGFloat = 1.8
+            let extend: CGFloat = 3.5
+            let leftX  = rect.minX - extend + wobble(1.2)
+            let rightX = rect.maxX + extend + wobble(1.2)
+
+            let path = UIBezierPath()
+            // Top edge — left to right with vertical wobble
+            path.move(to: CGPoint(x: leftX, y: rect.minY + wobble(yWobble)))
+            for i in 1...segments {
+                let t = CGFloat(i) / CGFloat(segments)
+                let x = leftX + (rightX - leftX) * t
+                path.addLine(to: CGPoint(x: x, y: rect.minY + wobble(yWobble)))
+            }
+            // Right end
+            path.addLine(to: CGPoint(x: rightX, y: rect.maxY + wobble(yWobble)))
+            // Bottom edge — right to left with vertical wobble
+            for i in stride(from: segments - 1, through: 0, by: -1) {
+                let t = CGFloat(i) / CGFloat(segments)
+                let x = leftX + (rightX - leftX) * t
+                path.addLine(to: CGPoint(x: x, y: rect.maxY + wobble(yWobble)))
+            }
+            path.close()
+
+            g.saveGState()
+            g.setFillColor(color.cgColor)
+            g.addPath(path.cgPath)
+            g.fillPath()
+            g.restoreGState()
+        }
+
         func drawFooter(_ g: CGContext) {
             guard let f = footerText, !f.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
             let footerTop = page.height - margin - CGFloat(34)
@@ -425,15 +470,17 @@ enum DPInvoicePDF {
                 _ = draw("Notes", at: CGPoint(x: margin, y: ny), font: h2)
                 ny += CGFloat(22)
                 let notesWidth = boxX - margin - gutter
-                // Yellow highlighter behind the notes body so the client doesn't miss it.
+                // Hand-drawn highlighter behind the notes body — wavy edges + slight overshoot
+                // so it reads as a real pen stroke, not a printer rectangle.
                 let notesBodyH = measureText(n, width: notesWidth, font: body)
                 let highlight = CGRect(x: margin - 4,
                                        y: ny - 3,
                                        width: notesWidth + 8,
                                        height: notesBodyH + 6)
                 if let g = UIGraphicsGetCurrentContext() {
-                    g.setFillColor(UIColor(red: 1.0, green: 0.94, blue: 0.45, alpha: 1.0).cgColor)
-                    g.fill(highlight)
+                    drawHighlighterStroke(in: g,
+                                          rect: highlight,
+                                          color: UIColor(red: 1.0, green: 0.94, blue: 0.45, alpha: 1.0))
                 }
                 _ = drawMultiline(n,
                                   at: CGPoint(x: margin, y: ny),
