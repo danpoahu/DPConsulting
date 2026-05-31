@@ -322,7 +322,7 @@ enum DPInvoicePDF {
                 if let notes, !notes.isEmpty {
                     notesH = measureText(notes, width: descWidth, font: italic) + CGFloat(2)
                 }
-                let rowHeight = descH + notesH + CGFloat(6)
+                let rowHeight = descH + notesH + CGFloat(14)
 
                 // Check if this row fits on the current page
                 if ty + rowHeight > pageBottom {
@@ -423,8 +423,18 @@ enum DPInvoicePDF {
                 let gutter: CGFloat = 12
                 var ny = totalsTop
                 _ = draw("Notes", at: CGPoint(x: margin, y: ny), font: h2)
-                ny += CGFloat(14)
+                ny += CGFloat(22)
                 let notesWidth = boxX - margin - gutter
+                // Yellow highlighter behind the notes body so the client doesn't miss it.
+                let notesBodyH = measureText(n, width: notesWidth, font: body)
+                let highlight = CGRect(x: margin - 4,
+                                       y: ny - 3,
+                                       width: notesWidth + 8,
+                                       height: notesBodyH + 6)
+                if let g = UIGraphicsGetCurrentContext() {
+                    g.setFillColor(UIColor(red: 1.0, green: 0.94, blue: 0.45, alpha: 1.0).cgColor)
+                    g.fill(highlight)
+                }
                 _ = drawMultiline(n,
                                   at: CGPoint(x: margin, y: ny),
                                   width: notesWidth,
