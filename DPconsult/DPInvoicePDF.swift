@@ -127,9 +127,10 @@ enum DPInvoicePDF {
         }
 
         // Draws a wobbly highlighter-pen-style fill instead of a perfect rectangle.
-        // Top and bottom edges wave slightly; left/right ends overshoot the rect a touch
-        // so the mark reads as a hand-drawn stroke. Seeded from the rect's position so the
-        // same invoice renders the same wobble every time (no flicker on re-export).
+        // Top + bottom edges wave with a Bezier curve through randomly-placed control points;
+        // ends overshoot the rect and have asymmetric jitter to feel like a real pen stroke.
+        // A softer halo behind the main stroke mimics ink bleed on paper.
+        // Seeded from rect position so the same invoice renders identically every time.
         func drawHighlighterStroke(in g: CGContext, rect: CGRect, color: UIColor) {
             var seed: UInt64 = UInt64(bitPattern: Int64(rect.minX.rounded() * 73))
                           &+ UInt64(bitPattern: Int64(rect.minY.rounded() * 131))
@@ -140,33 +141,63 @@ enum DPInvoicePDF {
             }
             func wobble(_ amt: CGFloat) -> CGFloat { (nextUnit() - 0.5) * 2 * amt }
 
-            let segments = 14
-            let yWobble: CGFloat = 1.8
-            let extend: CGFloat = 3.5
-            let leftX  = rect.minX - extend + wobble(1.2)
-            let rightX = rect.maxX + extend + wobble(1.2)
+            // Build the wobbly path. Few, big bumps look more hand-drawn than many tiny ones.
+            func buildPath(yWobble: CGFloat, xExtend: CGFloat, endJitter: CGFloat) -> UIBezierPath {
+                let segments = 7
+                let leftX  = rect.minX - xExtend + wobble(endJitter)
+                let rightX = rect.maxX + xExtend + wobble(endJitter)
 
-            let path = UIBezierPath()
-            // Top edge — left to right with vertical wobble
-            path.move(to: CGPoint(x: leftX, y: rect.minY + wobble(yWobble)))
-            for i in 1...segments {
-                let t = CGFloat(i) / CGFloat(segments)
-                let x = leftX + (rightX - leftX) * t
-                path.addLine(to: CGPoint(x: x, y: rect.minY + wobble(yWobble)))
-            }
-            // Right end
-            path.addLine(to: CGPoint(x: rightX, y: rect.maxY + wobble(yWobble)))
-            // Bottom edge — right to left with vertical wobble
-            for i in stride(from: segments - 1, through: 0, by: -1) {
-                let t = CGFloat(i) / CGFloat(segments)
-                let x = leftX + (rightX - leftX) * t
-                path.addLine(to: CGPoint(x: x, y: rect.maxY + wobble(yWobble)))
-            }
-            path.close()
+                // Sample wobbly points across the top and bottom edges.
+                var topPts: [CGPoint] = []
+                var botPts: [CGPoint] = []
+                for i in 0...segments {
+                    let t = CGFloat(i) / CGFloat(segments)
+                    let x = leftX + (rightX - leftX) * t
+                    topPts.append(CGPoint(x: x, y: rect.minY + wobble(yWobble)))
+                    botPts.append(CGPoint(x: x, y: rect.maxY + wobble(yWobble)))
+                }
 
+                let path = UIBezierPath()
+                path.move(to: topPts[0])
+                // Smooth the top edge with quad curves through midpoints.
+                for i in 1..<topPts.count {
+                    let prev = topPts[i - 1]
+                    let curr = topPts[i]
+                    let mid  = CGPoint(x: (prev.x + curr.x) / 2, y: (prev.y + curr.y) / 2)
+                    path.addQuadCurve(to: mid, controlPoint: prev)
+                    if i == topPts.count - 1 {
+                        path.addQuadCurve(to: curr, controlPoint: CGPoint(x: curr.x, y: prev.y))
+                    }
+                }
+                // Right end — small extra wobble so the corner isn't square.
+                path.addLine(to: CGPoint(x: rightX + wobble(1.5), y: rect.maxY + wobble(yWobble)))
+                // Bottom edge in reverse.
+                for i in stride(from: botPts.count - 1, through: 1, by: -1) {
+                    let prev = botPts[i]
+                    let curr = botPts[i - 1]
+                    let mid  = CGPoint(x: (prev.x + curr.x) / 2, y: (prev.y + curr.y) / 2)
+                    path.addQuadCurve(to: mid, controlPoint: prev)
+                    if i == 1 {
+                        path.addQuadCurve(to: curr, controlPoint: CGPoint(x: curr.x, y: prev.y))
+                    }
+                }
+                path.close()
+                return path
+            }
+
+            // Halo first — slightly bigger, much more transparent, mimics ink bleed.
+            let halo = buildPath(yWobble: 5.0, xExtend: 7.0, endJitter: 3.0)
+            g.saveGState()
+            g.setFillColor(color.withAlphaComponent(0.35).cgColor)
+            g.addPath(halo.cgPath)
+            g.fillPath()
+            g.restoreGState()
+
+            // Main stroke — slightly tighter and full opacity, painted on top of the halo.
+            let main = buildPath(yWobble: 3.5, xExtend: 4.0, endJitter: 2.0)
             g.saveGState()
             g.setFillColor(color.cgColor)
-            g.addPath(path.cgPath)
+            g.addPath(main.cgPath)
             g.fillPath()
             g.restoreGState()
         }
