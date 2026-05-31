@@ -55,8 +55,8 @@ struct DPInvoicingView: View {
     @State private var invoiceNotes = ""
 
     enum Status: String, CaseIterable, Identifiable {
-        case draft = "Draft (In Progress)"
-        case billable = "Billable (Ready to Send)"
+        case draft = "Quoted"
+        case billable = "Billable (In Progress)"
         case sent = "Sent"
         case partial = "Partial Payment"
         case paid = "Paid in Full"
@@ -100,6 +100,7 @@ struct DPInvoicingView: View {
     @State private var shareErrorMessage = ""
     @State private var isSaving = false
     @State private var didPrefill = false
+    @State private var saveSuccessMessage: String?
 
     @State private var editingIndex: Int? = nil
     @State private var showLineEditor = false
@@ -156,7 +157,7 @@ struct DPInvoicingView: View {
                     if status != .draft {
                         DatePicker("Due Date", selection: $dueDate.defaulted(Date()), displayedComponents: [.date])
                     }
-                    if status == .partial || status == .paid {
+                    if status != .draft {
                         HStack {
                             Text("Amount Paid:")
                             TextField("0.00", text: $amountPaidText)
@@ -226,16 +227,39 @@ struct DPInvoicingView: View {
             } message: {
                 Text(shareErrorMessage)
             }
+            .overlay(alignment: .bottom) {
+                if let msg = saveSuccessMessage {
+                    Text(msg)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 10)
+                        .background(.green, in: Capsule())
+                        .shadow(radius: 4)
+                        .padding(.bottom, 30)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .onAppear {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                                withAnimation { saveSuccessMessage = nil }
+                            }
+                        }
+                }
+            }
+            .animation(.easeInOut, value: saveSuccessMessage)
         }
     }
 
     // MARK: - Section Views
 
+    private var activeCustomers: [SDCustomer] {
+        customers.filter { $0.active }
+    }
+
     private var customerSection: some View {
         Section("Customer") {
             Picker("Select Customer", selection: customerIdBinding) {
                 Text("Choose...").tag(UUID?.none)
-                ForEach(customers) { customer in
+                ForEach(activeCustomers) { customer in
                     Text(customer.display).tag(UUID?.some(customer.id))
                 }
             }
@@ -246,7 +270,12 @@ struct DPInvoicingView: View {
         Section("Quick Line") {
             Picker("Service", selection: Binding(
                 get: { selectedService?.id },
-                set: { newId in selectedService = services.first(where: { $0.id == newId }) }
+                set: { newId in
+                    selectedService = services.first(where: { $0.id == newId })
+                    if let svc = selectedService, svc.rate > 0 {
+                        rateText = String(format: "%.2f", svc.rate)
+                    }
+                }
             )) {
                 Text("Choose...").tag(UUID?.none)
                 ForEach(services) { service in
@@ -392,8 +421,7 @@ struct DPInvoicingView: View {
         let computedDueDate: Date? = {
             switch status {
             case .draft: return nil
-            case .sent: return Date()
-            case .billable, .partial, .paid: return dueDate
+            case .sent, .billable, .partial, .paid: return dueDate
             }
         }()
 
@@ -464,15 +492,24 @@ struct DPInvoicingView: View {
         savedInvoice = invoice
         savedNumber = number
 
-        // Post A/R and Revenue when invoice is sent
-        if status == .sent {
+        // Post A/R and Revenue journal entry ONCE when invoice is first sent
+        if status == .sent && !invoice.journalPosted {
             postInvoiceJournalEntry(number: number, total: total)
+            invoice.journalPosted = true
+        }
+
+        // Post payment journal entry when amountPaid increases
+        let paymentDelta = amountPaid - invoice.lastPostedPayment
+        if paymentDelta > 0.005 {
+            postPaymentJournalEntry(number: number, amount: paymentDelta)
+            invoice.lastPostedPayment = amountPaid
         }
 
         do {
             let url = try generatePDFURL(customer: customer, settings: s, isQuote: status == .draft, numberOverride: number)
             if FileManager.default.fileExists(atPath: url.path) {
                 self.shareURL = url
+                self.saveSuccessMessage = "Invoice #\(savedNumber) saved"
             } else {
                 self.shareURL = nil
                 self.error = "PDF file could not be found after rendering."
@@ -482,6 +519,28 @@ struct DPInvoicingView: View {
         }
 
         isSaving = false
+    }
+
+    private func postPaymentJournalEntry(number: Int, amount: Double) {
+        ensureDefaultAccounts(context: modelContext)
+
+        let accountsDescriptor = FetchDescriptor<SDAccount>()
+        let accounts = (try? modelContext.fetch(accountsDescriptor)) ?? []
+
+        guard let ar = accounts.first(where: { $0.name.caseInsensitiveCompare("Accounts Receivable") == .orderedSame && $0.type == .asset }),
+              let cash = accounts.first(where: { $0.name.caseInsensitiveCompare("Cash") == .orderedSame && $0.type == .asset })
+        else { return }
+
+        let entry = SDJournalEntry(date: Date(), memo: "Payment received – Invoice #\(number)")
+        modelContext.insert(entry)
+
+        let debitLine = SDEntryLine(accountId: cash.id, debit: amount, credit: 0, memo: "Cash received", sortOrder: 0)
+        debitLine.journalEntry = entry
+        modelContext.insert(debitLine)
+
+        let creditLine = SDEntryLine(accountId: ar.id, debit: 0, credit: amount, memo: "Reduce A/R", sortOrder: 1)
+        creditLine.journalEntry = entry
+        modelContext.insert(creditLine)
     }
 
     private func postInvoiceJournalEntry(number: Int, total: Double) {
@@ -635,8 +694,8 @@ struct DPInvoicesListView: View {
         }
         var statuses: Set<String> {
             switch self {
-            case .quotes: return ["quote", "draft", "billable"]
-            case .invoices: return ["invoice", "sent", "partial"]
+            case .quotes: return ["quote", "draft"]
+            case .invoices: return ["invoice", "sent", "partial", "billable"]
             case .paid: return ["paid"]
             }
         }
@@ -651,9 +710,20 @@ struct DPInvoicesListView: View {
     @State private var filter: Filter = .invoices
     @State private var editorRoute: EditorRoute?
     @State private var error: String?
+    @State private var searchText = ""
+    @State private var markPaidInvoice: SDInvoice?
+    @State private var markPaidDate: Date = Date()
+    @State private var markPaidAmountText: String = ""
+    @State private var showMarkPaid = false
 
     private var filteredInvoices: [SDInvoice] {
-        allInvoices.filter { filter.statuses.contains($0.status.lowercased()) }
+        allInvoices
+            .filter { filter.statuses.contains($0.status.lowercased()) }
+            .filter { inv in
+                searchText.isEmpty ||
+                "\(inv.invoiceNumber)".contains(searchText) ||
+                (inv.customer?.name ?? "").localizedCaseInsensitiveContains(searchText)
+            }
     }
 
     var body: some View {
@@ -671,8 +741,34 @@ struct DPInvoicesListView: View {
                     Button { editorRoute = .edit(inv) } label: {
                         InvoiceRow(inv: inv, customerName: nameFor(inv))
                     }
+                    .swipeActions(edge: .leading) {
+                        if inv.status.lowercased() != "paid" && inv.status.lowercased() != "draft" && inv.status.lowercased() != "quote" {
+                            Button {
+                                markPaidInvoice = inv
+                                markPaidDate = Date()
+                                markPaidAmountText = String(format: "%.2f", inv.balance)
+                                showMarkPaid = true
+                            } label: {
+                                Label("Mark Paid", systemImage: "checkmark.circle.fill")
+                            }
+                            .tint(.green)
+                        }
+                    }
+                    .contextMenu {
+                        Button { editorRoute = .edit(inv) } label: { Label("Edit", systemImage: "pencil") }
+                        let s = inv.status.lowercased()
+                        if s != "paid" && s != "draft" && s != "quote" {
+                            Button {
+                                markPaidInvoice = inv
+                                markPaidDate = Date()
+                                markPaidAmountText = String(format: "%.2f", inv.balance)
+                                showMarkPaid = true
+                            } label: { Label("Mark Paid", systemImage: "checkmark.circle.fill") }
+                        }
+                    }
                 }
             }
+            .searchable(text: $searchText, prompt: "Search by customer or invoice #")
             .navigationTitle("DP Invoices")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } }
@@ -693,11 +789,105 @@ struct DPInvoicesListView: View {
                 }
                 .presentationSizing(.form)
             }
+            .sheet(isPresented: $showMarkPaid) {
+                if let inv = markPaidInvoice {
+                    NavigationStack {
+                        let payAmount = Double(markPaidAmountText) ?? 0
+                        let isPartial = payAmount > 0.005 && payAmount < inv.balance - 0.005
+                        Form {
+                            Section {
+                                HStack {
+                                    Text("Invoice")
+                                    Spacer()
+                                    Text("#\(inv.invoiceNumber) – \(nameFor(inv))").foregroundStyle(.secondary)
+                                }
+                                HStack {
+                                    Text("Balance Due")
+                                    Spacer()
+                                    Text(inv.balance.currencyString()).fontWeight(.semibold)
+                                }
+                            }
+                            Section("Payment Details") {
+                                HStack {
+                                    Text("Payment Amount")
+                                    TextField("0.00", text: $markPaidAmountText)
+                                        .keyboardType(.decimalPad)
+                                        .multilineTextAlignment(.trailing)
+                                }
+                                DatePicker("Payment Date", selection: $markPaidDate, displayedComponents: .date)
+                            }
+                            if isPartial {
+                                Section {
+                                    HStack {
+                                        Image(systemName: "info.circle.fill").foregroundStyle(.orange)
+                                        Text("Status will be set to **Partial Payment** with a remaining balance of \((inv.balance - payAmount).currencyString())")
+                                            .font(.subheadline)
+                                    }
+                                }
+                            }
+                        }
+                        .navigationTitle(isPartial ? "Record Payment" : "Mark Paid")
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) { Button("Cancel") { showMarkPaid = false } }
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button(isPartial ? "Record" : "Confirm") {
+                                    markPaid(inv)
+                                    showMarkPaid = false
+                                }
+                                .fontWeight(.semibold)
+                                .disabled(payAmount < 0.01)
+                            }
+                        }
+                    }
+                    .presentationDetents([.medium])
+                    .presentationSizing(.form)
+                }
+            }
         }
     }
 
     private func nameFor(_ inv: SDInvoice) -> String {
         inv.customer?.name ?? customers.first(where: { $0.id.uuidString == inv.customerId })?.name ?? "Customer"
+    }
+
+    private func markPaid(_ inv: SDInvoice) {
+        let payAmount = min(Double(markPaidAmountText) ?? inv.balance, inv.balance)
+        guard payAmount > 0.005 else { return }
+
+        let newAmountPaid = inv.amountPaid + payAmount
+        inv.amountPaid = newAmountPaid
+        inv.updatedAt = Date()
+
+        // Full payment → "paid", partial → "partial"
+        if inv.balance < 0.01 {
+            inv.status = "paid"
+        } else {
+            inv.status = "partial"
+        }
+
+        // Post payment journal entry
+        ensureDefaultAccounts(context: modelContext)
+        let accountsDescriptor = FetchDescriptor<SDAccount>()
+        let accounts = (try? modelContext.fetch(accountsDescriptor)) ?? []
+
+        guard let ar = accounts.first(where: { $0.name.caseInsensitiveCompare("Accounts Receivable") == .orderedSame && $0.type == .asset }),
+              let cash = accounts.first(where: { $0.name.caseInsensitiveCompare("Cash") == .orderedSame && $0.type == .asset })
+        else { return }
+
+        let delta = payAmount
+        let entry = SDJournalEntry(date: markPaidDate, memo: "Payment received – Invoice #\(inv.invoiceNumber)")
+        modelContext.insert(entry)
+
+        let debitLine = SDEntryLine(accountId: cash.id, debit: delta, credit: 0, memo: "Cash received", sortOrder: 0)
+        debitLine.journalEntry = entry
+        modelContext.insert(debitLine)
+
+        let creditLine = SDEntryLine(accountId: ar.id, debit: 0, credit: delta, memo: "Reduce A/R", sortOrder: 1)
+        creditLine.journalEntry = entry
+        modelContext.insert(creditLine)
+
+        inv.lastPostedPayment = newAmountPaid
     }
 
     struct InvoiceRow: View {
@@ -784,7 +974,7 @@ struct DPARStatementView: View {
     private var invoices: [SDInvoice] {
         allInvoices.filter { inv in
             let s = inv.status.lowercased()
-            return s == "sent" || s == "partial" || s == "billable"
+            return s == "sent" || s == "partial"
         }
     }
 
@@ -893,7 +1083,7 @@ struct DPARStatementView: View {
                                     }
                                     .padding(.top, 4)
 
-                                    Text("Tip: The sender account is chosen by Mail. To send from ohauappdesign@icloud.com, set it as your default in Mail or change it in the composer.")
+                                    Text("Tip: The sender account is chosen by Mail. To send from dan@oahuappdesign.com, set it as your default in Mail or change it in the composer.")
                                         .font(.caption2).foregroundColor(.secondary).padding(.top, 2)
                                 }
                                 .padding(.vertical, 4)
@@ -917,7 +1107,7 @@ struct DPARStatementView: View {
             .sheet(isPresented: $showingMailComposer) {
                 if !attachmentURLs.isEmpty {
                     MailComposerView(
-                        recipients: [emailRecipient],
+                        recipients: splitEmailRecipients(emailRecipient),
                         subject: "DP Consult Statement and Invoices Attached",
                         body: generateEmailBody(),
                         attachments: attachmentURLs,
@@ -954,7 +1144,12 @@ struct DPARStatementView: View {
             presentShareSheet(for: statementURL)
         }
         #else
-        presentShareSheet(for: statementURL)
+        // Mac Catalyst: use NSSharingService to open Mail with To, subject, body & attachments
+        emailRecipient = customer.email.isEmpty ? "" : customer.email
+        attachmentURLs = urls
+        let emailBody = generateEmailBody()
+        let subject = "DP Consult Statement and Invoices Attached"
+        openMailOnMac(to: splitEmailRecipients(emailRecipient), subject: subject, body: emailBody, attachments: urls)
         #endif
     }
 
@@ -1006,6 +1201,50 @@ struct DPARStatementView: View {
         }
         root.present(activityVC, animated: true)
     }
+
+    @MainActor
+    private func presentActivitySheet(items: [Any]) {
+        func topController() -> UIViewController? {
+            let scenes = UIApplication.shared.connectedScenes
+                .compactMap { $0 as? UIWindowScene }
+                .filter { $0.activationState == .foregroundActive }
+            guard let scene = scenes.first,
+                  let window = scene.windows.first(where: { $0.isKeyWindow }),
+                  var root = window.rootViewController else { return nil }
+            while let presented = root.presentedViewController { root = presented }
+            return root
+        }
+        guard let root = topController() else {
+            error = "Unable to find a window to present from."
+            return
+        }
+        let activityVC = UIActivityViewController(activityItems: items, applicationActivities: nil)
+        if let popover = activityVC.popoverPresentationController {
+            popover.sourceView = root.view
+            popover.sourceRect = CGRect(x: root.view.bounds.midX, y: root.view.bounds.midY, width: 1, height: 1)
+            popover.permittedArrowDirections = []
+        }
+        root.present(activityVC, animated: true)
+    }
+
+    #if targetEnvironment(macCatalyst)
+    private func openMailOnMac(to recipients: [String], subject: String, body: String, attachments: [URL]) {
+        // Open mailto URL so Apple Mail gets To/subject/body pre-filled
+        let joined = recipients.joined(separator: ",")
+        var components = URLComponents(string: "mailto:\(joined)")
+        components?.queryItems = [
+            URLQueryItem(name: "subject", value: subject),
+            URLQueryItem(name: "body", value: body)
+        ]
+        if let url = components?.url {
+            UIApplication.shared.open(url)
+        }
+        // Present share sheet for PDF attachments so user can drag them in
+        if !attachments.isEmpty {
+            presentActivitySheet(items: attachments.map { $0 as Any })
+        }
+    }
+    #endif
 
     private func generateStatementPDF(for customer: SDCustomer, invoices: [SDInvoice], settings: SDCompanySettings) -> URL? {
         let data = ARStatementPDF.render(
@@ -1243,6 +1482,32 @@ enum ARStatementPDF {
             let attrs: [NSAttributedString.Key: Any] = [.font: small, .paragraphStyle: para, .foregroundColor: UIColor.darkGray]
             (footerText as NSString).draw(in: CGRect(x: margin, y: footerTop + 6, width: page.width - margin*2, height: 28), withAttributes: attrs)
         }
+    }
+}
+
+// MARK: - Email Subject Source (for UIActivityViewController)
+
+/// Provides subject line and body text when sharing via Mail on Mac Catalyst
+final class EmailSubjectSource: NSObject, UIActivityItemSource {
+    let subject: String
+    let body: String
+
+    init(subject: String, body: String) {
+        self.subject = subject
+        self.body = body
+        super.init()
+    }
+
+    func activityViewControllerPlaceholderItem(_ activityViewController: UIActivityViewController) -> Any {
+        return body
+    }
+
+    func activityViewController(_ activityViewController: UIActivityViewController, itemForActivityType activityType: UIActivity.ActivityType?) -> Any? {
+        return body
+    }
+
+    func activityViewController(_ activityViewController: UIActivityViewController, subjectForActivityType activityType: UIActivity.ActivityType?) -> String {
+        return subject
     }
 }
 

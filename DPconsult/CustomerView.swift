@@ -8,15 +8,32 @@
 import SwiftUI
 import SwiftData
 
+/// Split a Contact-field string into clean email recipients.
+/// Accepts comma or semicolon separators with any whitespace.
+/// Drops empty entries; does NOT validate format (let Mail show the error).
+func splitEmailRecipients(_ raw: String) -> [String] {
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    if trimmed.isEmpty { return [] }
+    let parts = trimmed
+        .components(separatedBy: CharacterSet(charactersIn: ",;"))
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty }
+    return parts
+}
+
 struct DPCustomersListView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \SDCustomer.name) private var allCustomers: [SDCustomer]
+    @Query private var allInvoices: [SDInvoice]
     @State private var showAdd = false
     @State private var showArchived = false
     @State private var name = ""; @State private var email = ""; @State private var phone = ""; @State private var addr = ""; @State private var notes = ""
     @State private var editing: SDCustomer? = nil
     @State private var quotingCustomer: SDCustomer? = nil
+    @State private var searchText = ""
+    @State private var deleteTarget: SDCustomer? = nil
+    @State private var showDeleteConfirm = false
 
     private var filteredCustomers: [SDCustomer] {
         allCustomers
@@ -26,6 +43,12 @@ struct DPCustomersListView: View {
                 } else {
                     return customer.active
                 }
+            }
+            .filter { customer in
+                searchText.isEmpty ||
+                customer.name.localizedCaseInsensitiveContains(searchText) ||
+                customer.email.localizedCaseInsensitiveContains(searchText) ||
+                customer.phone.contains(searchText)
             }
             .sorted { customer1, customer2 in
                 customer1.createdAt > customer2.createdAt
@@ -94,7 +117,9 @@ struct DPCustomersListView: View {
                         // Clickable email
                         if !c.email.isEmpty {
                             Button {
-                                if let url = URL(string: "mailto:\(c.email)") {
+                                let recipients = splitEmailRecipients(c.email)
+                                if !recipients.isEmpty,
+                                   let url = URL(string: "mailto:\(recipients.joined(separator: ","))") {
                                     UIApplication.shared.open(url)
                                 }
                             } label: {
@@ -124,8 +149,30 @@ struct DPCustomersListView: View {
                         }
                     }
                     .padding(.vertical, 2)
+                    .swipeActions(edge: .trailing) {
+                        if !c.active && canDelete(c) {
+                            Button(role: .destructive) {
+                                deleteTarget = c
+                                showDeleteConfirm = true
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                        }
+                    }
+                    .contextMenu {
+                        Button { editing = c } label: { Label("Edit", systemImage: "pencil") }
+                        Button { quotingCustomer = c } label: { Label("New Quote", systemImage: "doc.text") }
+                        if !c.active && canDelete(c) {
+                            Divider()
+                            Button(role: .destructive) {
+                                deleteTarget = c
+                                showDeleteConfirm = true
+                            } label: { Label("Delete Customer", systemImage: "trash") }
+                        }
+                    }
                 }
             }
+            .searchable(text: $searchText, prompt: "Search customers")
             .navigationTitle(showArchived ? "Archived Customers" : "DP Customers")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } }
@@ -158,7 +205,34 @@ struct DPCustomersListView: View {
                 }
                 .presentationSizing(.form)
             }
+            .alert("Delete Customer", isPresented: $showDeleteConfirm) {
+                Button("Cancel", role: .cancel) { deleteTarget = nil }
+                Button("Delete", role: .destructive) {
+                    if let c = deleteTarget { deleteCustomer(c) }
+                    deleteTarget = nil
+                }
+            } message: {
+                if let c = deleteTarget {
+                    Text("Permanently delete \(c.name)? This cannot be undone.")
+                }
+            }
         }
+    }
+
+    private func canDelete(_ c: SDCustomer) -> Bool {
+        !allInvoices.contains { inv in
+            inv.customer?.id == c.id && inv.status.lowercased() == "paid"
+        }
+    }
+
+    private func deleteCustomer(_ c: SDCustomer) {
+        // Delete associated invoices (only drafts/quotes — paid check already done)
+        for inv in allInvoices where inv.customer?.id == c.id {
+            for item in (inv.items ?? []) { modelContext.delete(item) }
+            for log in (inv.timeLogs ?? []) { modelContext.delete(log) }
+            modelContext.delete(inv)
+        }
+        modelContext.delete(c)
     }
 
     private func clear() { name = ""; email = ""; phone = ""; addr = ""; notes = "" }

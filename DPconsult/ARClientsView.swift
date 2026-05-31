@@ -162,7 +162,7 @@ struct ARClientsView: View {
     @State private var showingMailUnavailableAlert = false
     @State private var composingForClient: ARClient?
     @State private var showingMailComposer = false
-    @State private var pendingMail: (subject: String, body: String, recipient: String)?
+    @State private var pendingMail: (subject: String, body: String, recipients: [String])?
 
     var body: some View {
         NavigationStack {
@@ -192,13 +192,23 @@ struct ARClientsView: View {
                             viewModel.emailStatement(for: client.id)
                             #if !targetEnvironment(macCatalyst)
                             if MFMailComposeViewController.canSendMail() {
-                                pendingMail = (subject: content.subject, body: content.body, recipient: client.email)
+                                pendingMail = (subject: content.subject, body: content.body, recipients: splitEmailRecipients(client.email))
                                 showingMailComposer = true
                             } else {
                                 composingForClient = client
                             }
                             #else
-                            composingForClient = client
+                            // Mac Catalyst: open mailto URL so Mail gets To/subject/body
+                            var comps = URLComponents(string: "mailto:\(splitEmailRecipients(client.email).joined(separator: ","))")
+                            comps?.queryItems = [
+                                URLQueryItem(name: "subject", value: content.subject),
+                                URLQueryItem(name: "body", value: content.body)
+                            ]
+                            if let url = comps?.url {
+                                UIApplication.shared.open(url)
+                            } else {
+                                composingForClient = client
+                            }
                             #endif
                         } label: {
                             Label("Email Statement", systemImage: "envelope")
@@ -264,7 +274,7 @@ struct ARClientsView: View {
             #if !targetEnvironment(macCatalyst)
             .sheet(isPresented: $showingMailComposer) {
                 if let mail = pendingMail {
-                    MailComposer(subject: mail.subject, recipients: [mail.recipient], body: mail.body)
+                    MailComposer(subject: mail.subject, recipients: mail.recipients, body: mail.body)
                         .presentationSizing(.form)
                 } else {
                     EmptyView()
