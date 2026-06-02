@@ -7,15 +7,19 @@
 
 import SwiftUI
 import SwiftData
+import OSLog
 #if targetEnvironment(macCatalyst)
 import UIKit
 #endif
 
 @main
 struct DPconsultApp: App {
+    static let log = Logger(subsystem: "com.dan.DPconsult", category: "lifecycle")
+
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @AppStorage("hasShownSyncPrompt") private var hasShownSyncPrompt: Bool = false
     @AppStorage("dedupRunCount") private var dedupRunCount: Int = 0
+    @Environment(\.scenePhase) private var scenePhase
     @State private var showSyncPrompt = false
     @State private var showRestartAlert = false
 
@@ -28,23 +32,27 @@ struct DPconsultApp: App {
         ])
 
         let iCloudEnabled = UserDefaults.standard.bool(forKey: "iCloudSyncEnabled")
-
-        let config: ModelConfiguration
-        if iCloudEnabled {
-            config = ModelConfiguration(
-                schema: schema,
-                cloudKitDatabase: .automatic
-            )
-        } else {
-            config = ModelConfiguration(
-                schema: schema,
-                cloudKitDatabase: .none
-            )
-        }
+        let primary = ModelConfiguration(schema: schema,
+                                         cloudKitDatabase: iCloudEnabled ? .automatic : .none)
 
         do {
-            return try ModelContainer(for: schema, configurations: [config])
+            let c = try ModelContainer(for: schema, configurations: [primary])
+            DPconsultApp.log.info("ModelContainer init OK (iCloud=\(iCloudEnabled, privacy: .public))")
+            return c
         } catch {
+            // CloudKit-mode init occasionally fails on Mac Catalyst (entitlement/cache/account state).
+            // Fall back to local-only so the app still launches and the user can see their data.
+            DPconsultApp.log.error("ModelContainer init failed (iCloud=\(iCloudEnabled, privacy: .public)): \(String(describing: error), privacy: .public)")
+            if iCloudEnabled {
+                let fallback = ModelConfiguration(schema: schema, cloudKitDatabase: .none)
+                do {
+                    let c = try ModelContainer(for: schema, configurations: [fallback])
+                    DPconsultApp.log.error("ModelContainer fell back to local-only after CloudKit init failure")
+                    return c
+                } catch {
+                    fatalError("Could not create ModelContainer (fallback also failed): \(error)")
+                }
+            }
             fatalError("Could not create ModelContainer: \(error)")
         }
     }()
@@ -96,6 +104,9 @@ struct DPconsultApp: App {
                 } message: {
                     Text("Please close and reopen the app to activate iCloud sync.")
                 }
+                .onChange(of: scenePhase) { oldPhase, newPhase in
+                    handleScenePhaseChange(from: oldPhase, to: newPhase)
+                }
         }
         .modelContainer(sharedModelContainer)
         #if targetEnvironment(macCatalyst)
@@ -122,6 +133,24 @@ struct DPconsultApp: App {
         }
     }
     #endif
+
+    private func handleScenePhaseChange(from old: ScenePhase, to new: ScenePhase) {
+        DPconsultApp.log.info("scenePhase: \(String(describing: old), privacy: .public) -> \(String(describing: new), privacy: .public)")
+        guard new == .active, old != .active else { return }
+        // Mac Catalyst can leave SwiftData/CloudKit views stale when the window
+        // returns from background. Saving the main context (no-op if no changes)
+        // and counting records here both nudges sync and surfaces empty-state
+        // events in the log for future debugging.
+        let ctx = sharedModelContainer.mainContext
+        do {
+            try ctx.save()
+        } catch {
+            DPconsultApp.log.error("scenePhase save() failed: \(String(describing: error), privacy: .public)")
+        }
+        let customers = (try? ctx.fetchCount(FetchDescriptor<SDCustomer>())) ?? -1
+        let invoices = (try? ctx.fetchCount(FetchDescriptor<SDInvoice>())) ?? -1
+        DPconsultApp.log.info("on .active: customers=\(customers) invoices=\(invoices)")
+    }
 
     private func runDedup() {
         Task.detached {

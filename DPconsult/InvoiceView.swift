@@ -60,6 +60,7 @@ struct DPInvoicingView: View {
         case sent = "Sent"
         case partial = "Partial Payment"
         case paid = "Paid in Full"
+        case void = "Void"
         var id: String { rawValue }
 
         var statusValue: String {
@@ -69,6 +70,7 @@ struct DPInvoicingView: View {
             case .sent: return "sent"
             case .partial: return "partial"
             case .paid: return "paid"
+            case .void: return "void"
             }
         }
 
@@ -79,6 +81,7 @@ struct DPInvoicingView: View {
             case "sent": return .sent
             case "partial": return .partial
             case "paid": return .paid
+            case "void": return .void
             case "quote": return .draft
             case "invoice": return .sent
             default: return .billable
@@ -157,11 +160,19 @@ struct DPInvoicingView: View {
 
                 Section("Invoice") {
                     Picker("Status", selection: $status) { ForEach(Status.allCases) { s in Text(s.rawValue).tag(s) } }
+                        .onChange(of: status) { _, newStatus in
+                            if newStatus == .paid {
+                                // "Paid in Full" → auto-fill Amount Paid with the invoice total.
+                                let total = currentTotal
+                                amountPaid = total
+                                amountPaidText = String(format: "%.2f", total)
+                            }
+                        }
                     DatePicker("Issue Date", selection: $issueDate, displayedComponents: [.date])
-                    if status != .draft {
+                    if status != .draft && status != .void {
                         DatePicker("Due Date", selection: $dueDate.defaulted(Date()), displayedComponents: [.date])
                     }
-                    if status != .draft {
+                    if status != .draft && status != .void {
                         HStack {
                             Text("Amount Paid:")
                             TextField("0.00", text: $amountPaidText)
@@ -171,6 +182,11 @@ struct DPInvoicingView: View {
                                     amountPaid = Double(newValue) ?? 0
                                 }
                         }
+                    }
+                    if status == .void {
+                        Label("This invoice is voided. It will not appear in Open or A/R.", systemImage: "xmark.octagon.fill")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
                     TextField("Notes (shows on PDF)", text: $invoiceNotes, axis: .vertical).lineLimit(1...3)
                 }
@@ -361,6 +377,12 @@ struct DPInvoicingView: View {
         didPrefill = true
     }
 
+    private var currentTotal: Double {
+        let s = settings ?? loadOrCreateSettings(context: modelContext)
+        let subtotal = items.reduce(0) { $0 + $1.amount }
+        return subtotal + (subtotal * s.salesTax)
+    }
+
     private var totalsSection: some View {
         let s = settings ?? loadOrCreateSettings(context: modelContext)
         let subtotal = items.reduce(0) { $0 + $1.amount }
@@ -439,7 +461,7 @@ struct DPInvoicingView: View {
 
         let computedDueDate: Date? = {
             switch status {
-            case .draft: return nil
+            case .draft, .void: return nil
             case .sent, .billable, .partial, .paid: return dueDate
             }
         }()
@@ -511,17 +533,30 @@ struct DPInvoicingView: View {
         savedInvoice = invoice
         savedNumber = number
 
+        // Voiding in the editor — reverse any posted journal entries before continuing
+        // so the rest of the save logic sees a clean slate.
+        if status == .void && invoice.journalPosted {
+            postVoidReversalJournalEntry(number: number,
+                                         total: invoice.total,
+                                         paymentAlreadyPosted: invoice.lastPostedPayment)
+            invoice.journalPosted = false
+            invoice.lastPostedPayment = 0
+            invoice.amountPaid = 0
+        }
+
         // Post A/R and Revenue journal entry ONCE when invoice is first sent
         if status == .sent && !invoice.journalPosted {
             postInvoiceJournalEntry(number: number, total: total)
             invoice.journalPosted = true
         }
 
-        // Post payment journal entry when amountPaid increases
-        let paymentDelta = amountPaid - invoice.lastPostedPayment
-        if paymentDelta > 0.005 {
-            postPaymentJournalEntry(number: number, amount: paymentDelta)
-            invoice.lastPostedPayment = amountPaid
+        // Post payment journal entry when amountPaid increases (skip when voided)
+        if status != .void {
+            let paymentDelta = amountPaid - invoice.lastPostedPayment
+            if paymentDelta > 0.005 {
+                postPaymentJournalEntry(number: number, amount: paymentDelta)
+                invoice.lastPostedPayment = amountPaid
+            }
         }
 
         do {
@@ -583,6 +618,42 @@ struct DPInvoicingView: View {
         let creditLine = SDEntryLine(accountId: revenue.id, debit: 0, credit: total, memo: "Revenue", sortOrder: 1)
         creditLine.journalEntry = entry
         modelContext.insert(creditLine)
+    }
+
+    private func postVoidReversalJournalEntry(number: Int, total: Double, paymentAlreadyPosted: Double) {
+        ensureDefaultAccounts(context: modelContext)
+        let accounts = (try? modelContext.fetch(FetchDescriptor<SDAccount>())) ?? []
+        guard let ar = accounts.first(where: { $0.name.caseInsensitiveCompare("Accounts Receivable") == .orderedSame && $0.type == .asset }),
+              let revenue = accounts.first(where: { $0.name.caseInsensitiveCompare("Sales Revenue") == .orderedSame && $0.type == .income })
+        else { return }
+
+        let arReversal = total - paymentAlreadyPosted
+        if arReversal > 0.005 {
+            let entry = SDJournalEntry(date: Date(), memo: "Void Invoice #\(number) – A/R reversal")
+            modelContext.insert(entry)
+            let debit = SDEntryLine(accountId: revenue.id, debit: arReversal, credit: 0,
+                                    memo: "Reverse Revenue", sortOrder: 0)
+            debit.journalEntry = entry
+            modelContext.insert(debit)
+            let credit = SDEntryLine(accountId: ar.id, debit: 0, credit: arReversal,
+                                     memo: "Reverse A/R", sortOrder: 1)
+            credit.journalEntry = entry
+            modelContext.insert(credit)
+        }
+
+        if paymentAlreadyPosted > 0.005,
+           let cash = accounts.first(where: { $0.name.caseInsensitiveCompare("Cash") == .orderedSame && $0.type == .asset }) {
+            let refund = SDJournalEntry(date: Date(), memo: "Void Invoice #\(number) – payment reversal")
+            modelContext.insert(refund)
+            let debit = SDEntryLine(accountId: revenue.id, debit: paymentAlreadyPosted, credit: 0,
+                                    memo: "Reverse Revenue (payment)", sortOrder: 0)
+            debit.journalEntry = refund
+            modelContext.insert(debit)
+            let credit = SDEntryLine(accountId: cash.id, debit: 0, credit: paymentAlreadyPosted,
+                                     memo: "Refund cash", sortOrder: 1)
+            credit.journalEntry = refund
+            modelContext.insert(credit)
+        }
     }
 
     @MainActor
@@ -783,16 +854,22 @@ struct DPInvoicesListView: View {
     @Query(sort: \SDCustomer.name) private var customers: [SDCustomer]
 
     private enum Filter: String, CaseIterable, Identifiable {
-        case quotes, invoices, paid
+        case quotes, invoices, paid, voided
         var id: String { rawValue }
         var title: String {
-            switch self { case .quotes: return "Quotes"; case .invoices: return "Open"; case .paid: return "Paid" }
+            switch self {
+            case .quotes: return "Quotes"
+            case .invoices: return "Open"
+            case .paid: return "Paid"
+            case .voided: return "Void"
+            }
         }
         var statuses: Set<String> {
             switch self {
             case .quotes: return ["quote", "draft"]
             case .invoices: return ["invoice", "sent", "partial", "billable"]
             case .paid: return ["paid"]
+            case .voided: return ["void"]
             }
         }
     }
@@ -811,6 +888,7 @@ struct DPInvoicesListView: View {
     @State private var markPaidDate: Date = Date()
     @State private var markPaidAmountText: String = ""
     @State private var showMarkPaid = false
+    @State private var invoiceToVoid: SDInvoice?
 
     private var filteredInvoices: [SDInvoice] {
         allInvoices
@@ -838,7 +916,8 @@ struct DPInvoicesListView: View {
                         InvoiceRow(inv: inv, customerName: nameFor(inv))
                     }
                     .swipeActions(edge: .leading) {
-                        if inv.status.lowercased() != "paid" && inv.status.lowercased() != "draft" && inv.status.lowercased() != "quote" {
+                        let s = inv.status.lowercased()
+                        if s != "paid" && s != "draft" && s != "quote" && s != "void" {
                             Button {
                                 markPaidInvoice = inv
                                 markPaidDate = Date()
@@ -850,16 +929,31 @@ struct DPInvoicesListView: View {
                             .tint(.green)
                         }
                     }
+                    .swipeActions(edge: .trailing) {
+                        let s = inv.status.lowercased()
+                        if s != "paid" && s != "void" {
+                            Button(role: .destructive) {
+                                invoiceToVoid = inv
+                            } label: {
+                                Label("Void", systemImage: "xmark.octagon.fill")
+                            }
+                        }
+                    }
                     .contextMenu {
                         Button { editorRoute = .edit(inv) } label: { Label("Edit", systemImage: "pencil") }
                         let s = inv.status.lowercased()
-                        if s != "paid" && s != "draft" && s != "quote" {
+                        if s != "paid" && s != "draft" && s != "quote" && s != "void" {
                             Button {
                                 markPaidInvoice = inv
                                 markPaidDate = Date()
                                 markPaidAmountText = String(format: "%.2f", inv.balance)
                                 showMarkPaid = true
                             } label: { Label("Mark Paid", systemImage: "checkmark.circle.fill") }
+                        }
+                        if s != "paid" && s != "void" {
+                            Button(role: .destructive) {
+                                invoiceToVoid = inv
+                            } label: { Label("Void", systemImage: "xmark.octagon.fill") }
                         }
                     }
                 }
@@ -884,6 +978,21 @@ struct DPInvoicesListView: View {
                     }
                 }
                 .presentationSizing(.form)
+            }
+            .confirmationDialog(
+                invoiceToVoid.map { "Void invoice #\($0.invoiceNumber)?" } ?? "Void invoice?",
+                isPresented: Binding(get: { invoiceToVoid != nil },
+                                     set: { if !$0 { invoiceToVoid = nil } }),
+                titleVisibility: .visible,
+                presenting: invoiceToVoid
+            ) { inv in
+                Button("Void", role: .destructive) {
+                    voidInvoice(inv)
+                    invoiceToVoid = nil
+                }
+                Button("Cancel", role: .cancel) { invoiceToVoid = nil }
+            } message: { _ in
+                Text("Voiding marks the invoice as cancelled. It will not appear in Open or A/R and cannot be marked paid.")
             }
             .sheet(isPresented: $showMarkPaid) {
                 if let inv = markPaidInvoice {
@@ -947,6 +1056,64 @@ struct DPInvoicesListView: View {
         inv.customer?.name ?? customers.first(where: { $0.id.uuidString == inv.customerId })?.name ?? "Customer"
     }
 
+    private func voidInvoice(_ inv: SDInvoice) {
+        inv.status = "void"
+        inv.dueDate = nil
+        inv.updatedAt = Date()
+        // If the invoice had already posted to A/R (status was sent/partial), reverse it
+        // so A/R balance and revenue stay clean. Otherwise voiding a draft/billable
+        // never posted anything and no reversal is needed.
+        if inv.journalPosted {
+            postVoidReversalJournalEntry(number: inv.invoiceNumber,
+                                         total: inv.total,
+                                         paymentAlreadyPosted: inv.lastPostedPayment)
+            inv.journalPosted = false
+            inv.lastPostedPayment = 0
+            inv.amountPaid = 0
+        }
+        try? modelContext.save()
+    }
+
+    private func postVoidReversalJournalEntry(number: Int, total: Double, paymentAlreadyPosted: Double) {
+        ensureDefaultAccounts(context: modelContext)
+        let accounts = (try? modelContext.fetch(FetchDescriptor<SDAccount>())) ?? []
+        guard let ar = accounts.first(where: { $0.name.caseInsensitiveCompare("Accounts Receivable") == .orderedSame && $0.type == .asset }),
+              let revenue = accounts.first(where: { $0.name.caseInsensitiveCompare("Sales Revenue") == .orderedSame && $0.type == .income })
+        else { return }
+
+        // Reverse the original Invoice-Sent entry: debit Revenue, credit A/R
+        // for the portion still in A/R (total minus any payment already credited).
+        let arReversal = total - paymentAlreadyPosted
+        if arReversal > 0.005 {
+            let entry = SDJournalEntry(date: Date(), memo: "Void Invoice #\(number) – A/R reversal")
+            modelContext.insert(entry)
+            let debit = SDEntryLine(accountId: revenue.id, debit: arReversal, credit: 0,
+                                    memo: "Reverse Revenue", sortOrder: 0)
+            debit.journalEntry = entry
+            modelContext.insert(debit)
+            let credit = SDEntryLine(accountId: ar.id, debit: 0, credit: arReversal,
+                                     memo: "Reverse A/R", sortOrder: 1)
+            credit.journalEntry = entry
+            modelContext.insert(credit)
+        }
+
+        // If a payment was already posted, also reverse the Cash leg
+        // (refund accrual: debit Revenue, credit Cash).
+        if paymentAlreadyPosted > 0.005,
+           let cash = accounts.first(where: { $0.name.caseInsensitiveCompare("Cash") == .orderedSame && $0.type == .asset }) {
+            let refund = SDJournalEntry(date: Date(), memo: "Void Invoice #\(number) – payment reversal")
+            modelContext.insert(refund)
+            let debit = SDEntryLine(accountId: revenue.id, debit: paymentAlreadyPosted, credit: 0,
+                                    memo: "Reverse Revenue (payment)", sortOrder: 0)
+            debit.journalEntry = refund
+            modelContext.insert(debit)
+            let credit = SDEntryLine(accountId: cash.id, debit: 0, credit: paymentAlreadyPosted,
+                                     memo: "Refund cash", sortOrder: 1)
+            credit.journalEntry = refund
+            modelContext.insert(credit)
+        }
+    }
+
     private func markPaid(_ inv: SDInvoice) {
         let payAmount = min(Double(markPaidAmountText) ?? inv.balance, inv.balance)
         guard payAmount > 0.005 else { return }
@@ -991,10 +1158,14 @@ struct DPInvoicesListView: View {
         let customerName: String
         private let df: DateFormatter = { let d = DateFormatter(); d.dateStyle = .medium; return d }()
 
+        private var isVoid: Bool { inv.status.lowercased() == "void" }
+
         var body: some View {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(verbatim: "#\(inv.invoiceNumber) - \(customerName)").font(.headline)
+                    Text(verbatim: "#\(inv.invoiceNumber) - \(customerName)")
+                        .font(.headline)
+                        .strikethrough(isVoid)
                     let dateStr = df.string(from: inv.issueDate)
                     Text(verbatim: inv.status.capitalized + " - " + dateStr).font(.caption).foregroundStyle(.secondary)
 
@@ -1018,7 +1189,9 @@ struct DPInvoicesListView: View {
                 }
                 Spacer()
                 VStack(alignment: .trailing, spacing: 4) {
-                    Text(String(format: "$%.2f", inv.total)).font(.headline)
+                    Text(String(format: "$%.2f", inv.total))
+                        .font(.headline)
+                        .strikethrough(isVoid)
                     if inv.status.lowercased() == "partial" && inv.balance > 0 {
                         Text("Due: \(inv.balance.currencyString())")
                             .font(.caption).foregroundStyle(.orange).fontWeight(.semibold)
@@ -1027,6 +1200,7 @@ struct DPInvoicesListView: View {
             }
             .padding(.vertical, 4)
             .padding(.horizontal, 12)
+            .opacity(isVoid ? 0.55 : 1.0)
             .background(
                 RoundedRectangle(cornerRadius: 8).fill(cardBackgroundColor)
             )
@@ -1037,19 +1211,22 @@ struct DPInvoicesListView: View {
         }
 
         private var cardBackgroundColor: Color {
+            if isVoid { return Color.gray.opacity(0.08) }
             if inv.status.lowercased() == "partial" { return Color.orange.opacity(0.1) }
             else if inv.isOverdue { return Color.red.opacity(0.08) }
             else { return Color.clear }
         }
 
         private var cardBorderColor: Color {
+            if isVoid { return Color.gray.opacity(0.4) }
             if inv.status.lowercased() == "partial" { return Color.orange.opacity(0.5) }
             else if inv.isOverdue { return Color.red.opacity(0.3) }
             else { return Color.clear }
         }
 
         private var cardBorderWidth: CGFloat {
-            (inv.status.lowercased() == "partial" || inv.isOverdue) ? 1.5 : 0
+            if isVoid { return 1.0 }
+            return (inv.status.lowercased() == "partial" || inv.isOverdue) ? 1.5 : 0
         }
     }
 }

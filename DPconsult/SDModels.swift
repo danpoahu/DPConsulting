@@ -95,6 +95,8 @@ final class SDInvoice {
     var balance: Double { total - amountPaid }
 
     var isOverdue: Bool {
+        let s = status.lowercased()
+        guard s != "paid", s != "void", s != "draft", s != "quote" else { return false }
         guard let dueDate, balance > 0 else { return false }
         return Calendar.current.startOfDay(for: dueDate) < Calendar.current.startOfDay(for: Date())
     }
