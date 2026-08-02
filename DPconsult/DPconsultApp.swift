@@ -18,7 +18,6 @@ struct DPconsultApp: App {
 
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @AppStorage("hasShownSyncPrompt") private var hasShownSyncPrompt: Bool = false
-    @AppStorage("dedupRunCount") private var dedupRunCount: Int = 0
     @Environment(\.scenePhase) private var scenePhase
     @State private var showSyncPrompt = false
     @State private var showRestartAlert = false
@@ -32,7 +31,19 @@ struct DPconsultApp: App {
         ])
 
         let iCloudEnabled = UserDefaults.standard.bool(forKey: "iCloudSyncEnabled")
+
+        // The app is unsandboxed, so SwiftData's default store path resolves to the shared
+        // ~/Library/Application Support/default.store, which another unsandboxed app also
+        // claims. Sharing that file leaves foreign CloudKit mirroring metadata in the store
+        // and prevents this app's sync from engaging. Own the path explicitly.
+        let storeURL: URL = {
+            let dir = URL.applicationSupportDirectory.appending(path: "DPconsult", directoryHint: .isDirectory)
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            return dir.appending(path: "DPconsult.store")
+        }()
+
         let primary = ModelConfiguration(schema: schema,
+                                         url: storeURL,
                                          cloudKitDatabase: iCloudEnabled ? .automatic : .none)
 
         do {
@@ -44,7 +55,7 @@ struct DPconsultApp: App {
             // Fall back to local-only so the app still launches and the user can see their data.
             DPconsultApp.log.error("ModelContainer init failed (iCloud=\(iCloudEnabled, privacy: .public)): \(String(describing: error), privacy: .public)")
             if iCloudEnabled {
-                let fallback = ModelConfiguration(schema: schema, cloudKitDatabase: .none)
+                let fallback = ModelConfiguration(schema: schema, url: storeURL, cloudKitDatabase: .none)
                 do {
                     let c = try ModelContainer(for: schema, configurations: [fallback])
                     DPconsultApp.log.error("ModelContainer fell back to local-only after CloudKit init failure")
@@ -66,8 +77,6 @@ struct DPconsultApp: App {
                     #endif
                     if !hasShownSyncPrompt {
                         showSyncPrompt = true
-                    } else if dedupRunCount < 10 {
-                        runDedup()
                     }
                     Task {
                         await WebProspectService.shared.registerSubscription()
@@ -152,40 +161,4 @@ struct DPconsultApp: App {
         DPconsultApp.log.info("on .active: customers=\(customers) invoices=\(invoices)")
     }
 
-    private func runDedup() {
-        Task.detached {
-            // Wait for iCloud sync to settle — longer on first few runs
-            try? await Task.sleep(for: .seconds(8))
-
-            let bgContext = ModelContext(sharedModelContainer)
-            bgContext.autosaveEnabled = false
-
-            dedup(context: bgContext, type: SDCustomer.self) { "\($0.name)|\(Int($0.createdAt.timeIntervalSince1970))" }
-            dedup(context: bgContext, type: SDService.self) { "\($0.name)|\($0.rate)" }
-            dedup(context: bgContext, type: SDInvoice.self) { "\($0.invoiceNumber)" }
-            dedup(context: bgContext, type: SDAccount.self) { "\($0.name)|\($0.typeRaw)" }
-            dedup(context: bgContext, type: SDJournalEntry.self) { "\($0.memo)|\(Int($0.createdAt.timeIntervalSince1970))" }
-            dedup(context: bgContext, type: SDCompanySettings.self) { $0.name }
-            dedup(context: bgContext, type: SDCounter.self) { $0.name }
-
-            try? bgContext.save()
-
-            await MainActor.run {
-                dedupRunCount += 1
-            }
-        }
-    }
-}
-
-private func dedup<T: PersistentModel>(context: ModelContext, type: T.Type, key: (T) -> String) {
-    guard let all = try? context.fetch(FetchDescriptor<T>()) else { return }
-    var seen = Set<String>()
-    for item in all {
-        let k = key(item)
-        if seen.contains(k) {
-            context.delete(item)
-        } else {
-            seen.insert(k)
-        }
-    }
 }
