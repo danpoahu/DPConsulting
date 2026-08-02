@@ -33,10 +33,17 @@ struct DPInvoicingView: View {
 
     let existing: SDInvoice?
     let preselectedCustomer: SDCustomer?
+    /// Line items handed in by the billing-summary importer. Applied only to a new
+    /// invoice; nothing is saved until the user presses Save here.
+    let seedItems: [DPInvoiceItemDraft]
+    let seedNotes: String
 
-    init(existing: SDInvoice? = nil, customer: SDCustomer? = nil) {
+    init(existing: SDInvoice? = nil, customer: SDCustomer? = nil,
+         seedItems: [DPInvoiceItemDraft] = [], seedNotes: String = "") {
         self.existing = existing
         self.preselectedCustomer = customer
+        self.seedItems = seedItems
+        self.seedNotes = seedNotes
     }
 
     @Query(sort: \SDCustomer.name) private var customers: [SDCustomer]
@@ -346,6 +353,13 @@ struct DPInvoicingView: View {
             // Pre-select customer for new quote/invoice
             if let c = preselectedCustomer {
                 selectedCustomer = c
+            }
+            // Seeded by the billing-summary importer, if it sent anything.
+            if !seedItems.isEmpty {
+                items = seedItems
+            }
+            if !seedNotes.isEmpty {
+                invoiceNotes = seedNotes
             }
             didPrefill = true
             return
@@ -877,11 +891,20 @@ struct DPInvoicesListView: View {
     private enum EditorRoute: Identifiable {
         case new
         case edit(SDInvoice)
-        var id: String { switch self { case .new: return "new"; case .edit(let inv): return "edit-\(inv.id)" } }
+        case seeded(DPImportSeed)
+        var id: String {
+            switch self {
+            case .new: return "new"
+            case .edit(let inv): return "edit-\(inv.id)"
+            case .seeded(let seed): return "seeded-\(seed.id)"
+            }
+        }
     }
 
     @State private var filter: Filter = .invoices
     @State private var editorRoute: EditorRoute?
+    @State private var showImportSheet = false
+    @State private var pendingSeed: DPImportSeed?
     @State private var error: String?
     @State private var searchText = ""
     @State private var markPaidInvoice: SDInvoice?
@@ -968,6 +991,12 @@ struct DPInvoicesListView: View {
                         dpPrint(data: data, jobName: "All Invoices")
                     } label: { Image(systemName: "printer") }
                 }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { showImportSheet = true } label: {
+                        Image(systemName: "square.and.arrow.down")
+                    }
+                    .help("Import a monthly work summary")
+                }
                 ToolbarItem(placement: .topBarTrailing) { Button { editorRoute = .new } label: { Image(systemName: "plus") } }
             }
             .sheet(item: $editorRoute) { route in
@@ -975,9 +1004,24 @@ struct DPInvoicesListView: View {
                     switch route {
                         case .new: DPInvoicingView()
                         case .edit(let inv): DPInvoicingView(existing: inv)
+                        case .seeded(let seed):
+                            DPInvoicingView(customer: seed.customer,
+                                            seedItems: seed.items,
+                                            seedNotes: seed.notes)
                     }
                 }
                 .presentationSizing(.form)
+            }
+            .sheet(isPresented: $showImportSheet) {
+                DPBillingImportView { seed in pendingSeed = seed }
+                    .presentationSizing(.form)
+            }
+            // Open the editor only once the import sheet has finished dismissing,
+            // so the two sheets never contend.
+            .onChange(of: showImportSheet) { _, isShowing in
+                guard !isShowing, let seed = pendingSeed else { return }
+                pendingSeed = nil
+                editorRoute = .seeded(seed)
             }
             .confirmationDialog(
                 invoiceToVoid.map { "Void invoice #\($0.invoiceNumber)?" } ?? "Void invoice?",
