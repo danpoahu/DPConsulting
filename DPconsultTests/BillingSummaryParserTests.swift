@@ -271,6 +271,72 @@ struct BillingSummaryParserTests {
         #expect(totals.total == 4500.00)
     }
 
+    // MARK: - Target amount parsing
+
+    @Test func plainDigitsParse() {
+        #expect(BillingAmount.parse("1150") == 1150)
+        #expect(BillingAmount.parse("1150.00") == 1150)
+    }
+
+    @Test func thousandsSeparatorsAndCurrencySymbolsParse() {
+        // Double("1,150") is nil — typing money the way people type money
+        // must not silently mean "no discount".
+        #expect(BillingAmount.parse("1,150") == 1150)
+        #expect(BillingAmount.parse("$1,150.00") == 1150)
+        #expect(BillingAmount.parse(" 1150 ") == 1150)
+        #expect(BillingAmount.parse("1 150") == 1150)
+    }
+
+    @Test func unusableTextIsRejectedRatherThanTreatedAsBlank() {
+        #expect(BillingAmount.parse("") == nil)
+        #expect(BillingAmount.parse("abc") == nil)
+        #expect(BillingAmount.parse("   ") == nil)
+    }
+
+    @Test func targetStateDistinguishesBlankFromInvalid() {
+        #expect(BillingTargetState.of("") == .blank)
+        #expect(BillingTargetState.of("   ") == .blank)
+        #expect(BillingTargetState.of("abc") == .invalid)
+        #expect(BillingTargetState.of("1,150") == .amount(1150))
+    }
+
+    // MARK: - Draft assembly (the seam that shipped untested)
+
+    @Test func draftsIncludeADiscountLineWhenATargetIsGiven() throws {
+        var summary = try BillingSummaryParser.parse(julyHTML)
+        summary.weeks[4].hours = 22.75
+
+        let drafts = BillingSummaryParser.makeDrafts(weeks: summary.weeks, rate: 50, target: 1150)
+
+        #expect(drafts.count == 6)
+        let discount = try #require(drafts.last)
+        #expect(discount.description == "Professional Discount")
+        #expect(discount.qty == 1)
+        #expect(discount.rate == -3537.50)
+        #expect(discount.amount == -3537.50)
+
+        let total = drafts.reduce(0) { $0 + $1.amount }
+        #expect(abs(total - 1150.00) < 0.005)
+    }
+
+    @Test func draftsCarryWeekDescriptionsAndNotes() throws {
+        let summary = try BillingSummaryParser.parse(julyHTML)
+        let drafts = BillingSummaryParser.makeDrafts(weeks: summary.weeks, rate: 50, target: nil)
+
+        #expect(drafts.count == 5)
+        #expect(drafts[0].description == "Jul 1 – 5: Membership build-up, PayPal integration, announcement tokens")
+        #expect(drafts[0].qty == 5.1)
+        #expect(drafts[0].rate == 50)
+        #expect(drafts[1].notes.contains("Paid memberships went live"))
+    }
+
+    @Test func noDiscountDraftWhenTargetIsBlankOrEqualToGross() throws {
+        let summary = try BillingSummaryParser.parse(julyHTML)
+
+        #expect(BillingSummaryParser.makeDrafts(weeks: summary.weeks, rate: 50, target: nil).count == 5)
+        #expect(BillingSummaryParser.makeDrafts(weeks: summary.weeks, rate: 50, target: 4500).count == 5)
+    }
+
     // MARK: - Customer matching
 
     @Test func acronymFromCustomerName() {

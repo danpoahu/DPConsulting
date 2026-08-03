@@ -407,6 +407,64 @@ enum BillingSummaryParser {
         return BillingTotals(grossHours: grossHours, grossAmount: grossAmount,
                              discount: round2(grossAmount - target), total: round2(target))
     }
+
+    // MARK: Line items
+
+    /// The week lines plus, when a target below gross is given, the discount line.
+    /// A free function so the discount actually gets covered by tests — this
+    /// assembly previously lived inline in the view and shipped untested.
+    static func makeDrafts(weeks: [BillingWeek], rate: Double, target: Double?) -> [DPInvoiceItemDraft] {
+        var drafts: [DPInvoiceItemDraft] = weeks.map { week in
+            let description = week.focus.isEmpty ? week.label : "\(week.label): \(week.focus)"
+            return DPInvoiceItemDraft(serviceId: "",
+                                      description: description,
+                                      qty: week.hours,
+                                      rate: rate,
+                                      notes: week.notes)
+        }
+
+        let computed = totals(weeks: weeks, rate: rate, target: target)
+        if computed.discount > 0 {
+            drafts.append(DPInvoiceItemDraft(serviceId: "",
+                                             description: "Professional Discount",
+                                             qty: 1,
+                                             rate: -computed.discount,
+                                             notes: ""))
+        }
+        return drafts
+    }
+}
+
+// MARK: - Money entry
+
+enum BillingAmount {
+    /// Lenient money parse. `Double.init` rejects "1,150" and "$1,150.00", which is
+    /// how people actually type money — and a rejected target used to look exactly
+    /// like a deliberately blank one, silently billing the full gross.
+    static func parse(_ text: String) -> Double? {
+        let digits = text.filter { $0.isNumber || $0 == "." || $0 == "-" }
+        guard !digits.isEmpty else { return nil }
+        return Double(digits)
+    }
+}
+
+/// Blank and unusable are different states and must look different on screen.
+enum BillingTargetState: Equatable {
+    case blank
+    case invalid
+    case amount(Double)
+
+    static func of(_ text: String) -> BillingTargetState {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return .blank }
+        guard let value = BillingAmount.parse(trimmed) else { return .invalid }
+        return .amount(value)
+    }
+
+    var value: Double? {
+        if case .amount(let value) = self { return value }
+        return nil
+    }
 }
 
 // MARK: - Customer matching
@@ -477,8 +535,9 @@ struct DPBillingImportView: View {
     @State private var targetText: String = ""
     @State private var errorMessage: String?
 
-    private var rate: Double { Double(rateText) ?? 0 }
-    private var target: Double? { targetText.isEmpty ? nil : Double(targetText) }
+    private var rate: Double { BillingAmount.parse(rateText) ?? 0 }
+    private var targetState: BillingTargetState { .of(targetText) }
+    private var target: Double? { targetState.value }
     private var totals: BillingTotals {
         BillingSummaryParser.totals(weeks: weeks, rate: rate, target: target)
     }
@@ -489,7 +548,8 @@ struct DPBillingImportView: View {
     }
 
     private var createDisabled: Bool {
-        selectedCustomer == nil || weeks.isEmpty || rate <= 0 || targetExceedsGross
+        selectedCustomer == nil || weeks.isEmpty || rate <= 0
+            || targetExceedsGross || targetState == .invalid
     }
 
     private var hoursMismatch: (parsed: Double, stated: Double)? {
@@ -647,14 +707,31 @@ struct DPBillingImportView: View {
                     .keyboardType(.decimalPad)
                 #endif
             }
-            if targetExceedsGross {
-                Text("Enter an amount between 0 and the gross.")
+            switch targetState {
+            case .invalid:
+                Label("Couldn't read that amount. Digits only, like 1150.",
+                      systemImage: "exclamationmark.triangle.fill")
                     .font(.caption)
                     .foregroundStyle(.red)
-            } else if totals.discount > 0 {
-                LabeledContent("Professional Discount",
-                               value: -totals.discount, format: .currency(code: "USD"))
+            case .blank:
+                Text("No discount \u{2014} billing the full gross amount.")
+                    .font(.caption)
                     .foregroundStyle(.secondary)
+            case .amount:
+                if targetExceedsGross {
+                    Label("Enter an amount between 0 and the gross.",
+                          systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                } else if totals.discount > 0 {
+                    LabeledContent("Professional Discount",
+                                   value: -totals.discount, format: .currency(code: "USD"))
+                        .foregroundStyle(.red)
+                } else {
+                    Text("Target equals the gross \u{2014} no discount line.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
             LabeledContent("Invoice total", value: totals.total, format: .currency(code: "USD"))
                 .fontWeight(.semibold)
@@ -704,23 +781,8 @@ struct DPBillingImportView: View {
     private func create() {
         guard let customer = selectedCustomer else { return }
 
-        var items: [DPInvoiceItemDraft] = weeks.map { week in
-            let description = week.focus.isEmpty ? week.label : "\(week.label): \(week.focus)"
-            return DPInvoiceItemDraft(serviceId: "",
-                                      description: description,
-                                      qty: week.hours,
-                                      rate: rate,
-                                      notes: week.notes)
-        }
-
-        let computed = totals
-        if computed.discount > 0 {
-            items.append(DPInvoiceItemDraft(serviceId: "",
-                                            description: "Professional Discount",
-                                            qty: 1,
-                                            rate: -computed.discount,
-                                            notes: ""))
-        }
+        let items = BillingSummaryParser.makeDrafts(weeks: weeks, rate: rate, target: target)
+        importLog.info("Import created \(items.count, privacy: .public) line items, discount \(self.totals.discount, privacy: .public)")
 
         onCreate(DPImportSeed(customer: customer, items: items, notes: invoiceNotes))
         dismiss()
