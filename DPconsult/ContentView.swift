@@ -1,18 +1,8 @@
-//
-//  ContentView.swift
-//  DPconsult
-//
-//  Created by Daniel Pellegrini on 9/7/25.
-//
-
+// ContentView.swift — unused (app entry is DPBillingHomeView)
 import SwiftUI
 
 struct ContentView: View {
     var body: some View {
-        ARClientsView()
+        DPBillingHomeView()
     }
 }
-#Preview("iPhone 17 Pro") {
-    ContentView()
-}
-

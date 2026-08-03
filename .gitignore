@@ -2,6 +2,11 @@
 AuthKey_*.p8
 GoogleService-Info.plist
 
+# Local agent config — this repo is PUBLIC; CLAUDE.md holds Play Console
+# links, signing-key fingerprints and account notes.
+.claude/
+CLAUDE.md
+
 # Xcode user data
 xcuserdata/
 *.xcuserdatad/
