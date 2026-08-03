@@ -23,7 +23,7 @@ enum BKReportsPDF {
         return h
     }
 
-    static func renderBalanceSheet(bs: (assets: [(SDAccount, Double)], liabilities: [(SDAccount, Double)], equity: [(SDAccount, Double)], totals: (assets: Double, liabilities: Double, equity: Double), retainedEarnings: Double)) -> Data {
+    static func renderBalanceSheet(bs: (assets: [(SDAccount, Double)], liabilities: [(SDAccount, Double)], equity: [(SDAccount, Double)], totals: (assets: Double, liabilities: Double, equity: Double), retainedEarnings: Double), pl: (income: [(SDAccount, Double)], expenses: [(SDAccount, Double)], net: Double)? = nil, salesRevenue: Double = 0) -> Data {
         let page = CGRect(x: 0, y: 0, width: 612, height: 792) // US Letter 8.5"x11" at 72dpi
         let margin: CGFloat = 36
 
@@ -152,6 +152,94 @@ enum BKReportsPDF {
             let checkText = String(format: "Check (Assets - (L+E)): $%.2f", diff)
             let color: UIColor = abs(diff) < 0.005 ? .systemGreen : .systemRed
             draw(checkText, at: CGPoint(x: margin, y: bottomY + 6), font: body, color: color)
+
+            // ── Page 2: Profit & Loss ──
+            if let pl = pl {
+                ctx.beginPage()
+                let g2 = UIGraphicsGetCurrentContext()!
+                var y2 = margin
+
+                // Header: logo on the right, title on the left
+                let logoH2 = drawLogo(named: "DPLogo", at: CGPoint(x: page.width - margin - 140, y: y2), maxWidth: 110)
+
+                let titleH2 = ("Profit & Loss" as NSString).size(withAttributes: [.font: h1]).height
+                draw("Profit & Loss", at: CGPoint(x: margin, y: y2), font: h1)
+                g2.setFillColor(orange.cgColor)
+                g2.fill(CGRect(x: margin, y: y2 + titleH2 + 4, width: 160, height: 3))
+                y2 += titleH2 + 18
+
+                let asOf2 = DateFormatter.localizedString(from: Date(), dateStyle: .medium, timeStyle: .none)
+                draw("Fiscal Year to Date", at: CGPoint(x: margin, y: y2), font: small, color: .darkGray)
+                y2 += 14
+                draw("Generated: \(asOf2)", at: CGPoint(x: margin, y: y2), font: small, color: .gray)
+                y2 += 8
+                y2 = max(y2, margin + logoH2 + 28)
+
+                // Divider
+                g2.setStrokeColor(hairline)
+                g2.setLineWidth(0.5)
+                g2.move(to: CGPoint(x: margin, y: y2))
+                g2.addLine(to: CGPoint(x: page.width - margin, y: y2))
+                g2.strokePath()
+                y2 += 10
+
+                let fullWidth = page.width - margin * 2
+
+                // Income section header
+                func sectionHeader(_ title: String, y: CGFloat) -> CGFloat {
+                    let headerH: CGFloat = 22
+                    g2.setFillColor(blue.cgColor)
+                    g2.fill(CGRect(x: margin, y: y, width: fullWidth, height: headerH))
+                    draw(title, at: CGPoint(x: margin + 10, y: y + 4), font: h2, color: .white)
+                    return y + headerH + 4
+                }
+
+                func sectionRow(name: String, amount: Double, y: CGFloat, index: Int) -> CGFloat {
+                    let rowH: CGFloat = 18
+                    if index % 2 == 1 {
+                        g2.setFillColor(stripe.cgColor)
+                        g2.fill(CGRect(x: margin, y: y, width: fullWidth, height: rowH))
+                    }
+                    draw(name, at: CGPoint(x: margin + 10, y: y + 2), font: body)
+                    drawRight(money(amount), in: CGRect(x: margin + 10, y: y, width: fullWidth - 20, height: rowH), font: body)
+                    return y + rowH
+                }
+
+                func sectionTotal(label: String, amount: Double, y: CGFloat, positive: Bool = true) -> CGFloat {
+                    g2.setFillColor(orange.withAlphaComponent(0.1).cgColor)
+                    g2.fill(CGRect(x: margin, y: y, width: fullWidth, height: 20))
+                    draw(label, at: CGPoint(x: margin + 10, y: y + 3), font: h2)
+                    drawRight(money(amount), in: CGRect(x: margin + 10, y: y, width: fullWidth - 20, height: 20), font: h2, color: positive ? .black : .systemRed)
+                    return y + 28
+                }
+
+                // Income
+                y2 = sectionHeader("Income", y: y2)
+                y2 = sectionRow(name: "Sales Revenue (Invoices FY YTD)", amount: salesRevenue, y: y2, index: 0)
+                let totalIncome = salesRevenue
+                y2 = sectionTotal(label: "Total Income", amount: totalIncome, y: y2 + 6)
+
+                // Expenses
+                y2 = sectionHeader("Expenses", y: y2)
+                for (idx, item) in pl.expenses.enumerated() {
+                    y2 = sectionRow(name: item.0.name, amount: item.1, y: y2, index: idx)
+                }
+                let totalExpenses = pl.expenses.reduce(0) { $0 + $1.1 }
+                y2 = sectionTotal(label: "Total Expenses", amount: totalExpenses, y: y2 + 6)
+
+                // Net Profit/Loss
+                let netPL = totalIncome - totalExpenses
+                g2.setStrokeColor(hairline)
+                g2.setLineWidth(0.5)
+                g2.move(to: CGPoint(x: margin, y: y2))
+                g2.addLine(to: CGPoint(x: page.width - margin, y: y2))
+                g2.strokePath()
+                y2 += 8
+
+                let netColor: UIColor = netPL >= 0 ? .systemGreen : .systemRed
+                draw("Net Profit/Loss", at: CGPoint(x: margin + 10, y: y2), font: h1)
+                drawRight(money(netPL), in: CGRect(x: margin + 10, y: y2, width: fullWidth - 20, height: 30), font: h1, color: netColor)
+            }
         }
     }
 

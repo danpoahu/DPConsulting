@@ -24,6 +24,9 @@ struct DPBookkeepingView: View {
     @State private var shareAlertMessage = ""
     @State private var shareItemURL: URL? = nil
     @State private var showingShareSheet = false
+    @State private var showReconcileConfirm = false
+    @State private var reconcileMessage = ""
+    @State private var showReconcileResult = false
 
     private var calculator: BKCalculator {
         BKCalculator(accounts: accounts, entries: entries)
@@ -74,6 +77,11 @@ struct DPBookkeepingView: View {
                                 Button("Share Balance Sheet PDF") { shareBalanceSheetPDF() }
                                 Button("Share Journal PDF") { shareJournalPDF() }
                             }
+                            Section("Maintenance") {
+                                Button("Reconcile A/R from Invoices", role: .destructive) {
+                                    showReconcileConfirm = true
+                                }
+                            }
                         } label: {
                             Image(systemName: "square.and.arrow.up")
                         }
@@ -115,7 +123,97 @@ struct DPBookkeepingView: View {
                     }
                 }
             }
+            .alert("Reconcile A/R", isPresented: $showReconcileConfirm) {
+                Button("Cancel", role: .cancel) {}
+                Button("Reconcile", role: .destructive) { reconcileAR() }
+            } message: {
+                Text("This will delete ALL journal entries touching A/R and re-create them from actual invoice data. Continue?")
+            }
+            .alert("Reconciliation Complete", isPresented: $showReconcileResult) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(reconcileMessage)
+            }
         }
+    }
+
+    // MARK: - Reconcile A/R
+
+    private func reconcileAR() {
+        // 1. Find A/R account
+        ensureDefaultAccounts(context: modelContext)
+        let accountsDescriptor = FetchDescriptor<SDAccount>()
+        let accts = (try? modelContext.fetch(accountsDescriptor)) ?? []
+
+        guard let ar = accts.first(where: { $0.name.caseInsensitiveCompare("Accounts Receivable") == .orderedSame && $0.type == .asset }),
+              let revenue = accts.first(where: { $0.name.caseInsensitiveCompare("Sales Revenue") == .orderedSame && $0.type == .income }),
+              let cash = accts.first(where: { $0.name.caseInsensitiveCompare("Cash") == .orderedSame && $0.type == .asset })
+        else {
+            reconcileMessage = "Could not find required accounts."
+            showReconcileResult = true
+            return
+        }
+
+        // 2. Delete ALL journal entries that touch A/R (clean slate)
+        var deleted = 0
+        for entry in entries {
+            let lines = entry.lines ?? []
+            let touchesAR = lines.contains { $0.accountId == ar.id }
+            if touchesAR {
+                for line in lines { modelContext.delete(line) }
+                modelContext.delete(entry)
+                deleted += 1
+            }
+        }
+
+        // 3. Re-post from actual invoices
+        var posted = 0
+        var expectedAR: Double = 0
+        for inv in invoices {
+            let status = inv.status.lowercased()
+            guard status == "sent" || status == "partial" || status == "paid" else {
+                inv.journalPosted = false
+                inv.lastPostedPayment = 0
+                continue
+            }
+
+            // Post A/R debit + Revenue credit for invoice total
+            let arEntry = SDJournalEntry(date: inv.issueDate, memo: "Invoice #\(inv.invoiceNumber) sent")
+            modelContext.insert(arEntry)
+
+            let debitLine = SDEntryLine(accountId: ar.id, debit: inv.total, credit: 0, memo: "A/R", sortOrder: 0)
+            debitLine.journalEntry = arEntry
+            modelContext.insert(debitLine)
+
+            let creditLine = SDEntryLine(accountId: revenue.id, debit: 0, credit: inv.total, memo: "Revenue", sortOrder: 1)
+            creditLine.journalEntry = arEntry
+            modelContext.insert(creditLine)
+
+            inv.journalPosted = true
+            posted += 1
+
+            // Post payment if any (capped at invoice total to prevent over-credit)
+            let payment = min(inv.amountPaid, inv.total)
+            if payment > 0.005 {
+                let payEntry = SDJournalEntry(date: inv.updatedAt, memo: "Payment received – Invoice #\(inv.invoiceNumber)")
+                modelContext.insert(payEntry)
+
+                let cashDebit = SDEntryLine(accountId: cash.id, debit: payment, credit: 0, memo: "Cash received", sortOrder: 0)
+                cashDebit.journalEntry = payEntry
+                modelContext.insert(cashDebit)
+
+                let arCredit = SDEntryLine(accountId: ar.id, debit: 0, credit: payment, memo: "Reduce A/R", sortOrder: 1)
+                arCredit.journalEntry = payEntry
+                modelContext.insert(arCredit)
+            }
+            inv.lastPostedPayment = inv.amountPaid
+
+            let netBalance = inv.total - min(inv.amountPaid, inv.total)
+            expectedAR += netBalance
+        }
+
+        reconcileMessage = "Removed \(deleted) old entries, re-posted \(posted) invoices. Expected A/R: \(String(format: "$%.2f", expectedAR))"
+        showReconcileResult = true
     }
 
     // MARK: Accounts Tab
@@ -478,9 +576,32 @@ struct DPBookkeepingView: View {
 
     // MARK: - Bookkeeping PDF Exports
 
+    private var fyDateRange: (start: Date, end: Date) {
+        let cal = Calendar.current
+        let now = Date()
+        let currentYear = cal.component(.year, from: now)
+        let augFirstThisYear = cal.date(from: DateComponents(year: currentYear, month: 8, day: 1)) ?? now
+        let ytdStart = (now >= augFirstThisYear) ? augFirstThisYear : (cal.date(from: DateComponents(year: currentYear - 1, month: 8, day: 1)) ?? augFirstThisYear)
+        return (ytdStart, now)
+    }
+
+    private var fySalesRevenue: Double {
+        let range = fyDateRange
+        let allowedStatuses = Set(["draft", "billable", "invoice", "sent", "partial", "paid"])
+        let fyInvoices = invoices.filter { inv in
+            inv.issueDate >= range.start && inv.issueDate <= range.end && allowedStatuses.contains(inv.status.lowercased())
+        }
+        return fyInvoices.reduce(0) { sum, inv in
+            let itemsSum = (inv.items ?? []).reduce(0) { $0 + $1.amount }
+            return sum + max(inv.total, inv.subtotal + inv.tax, itemsSum + inv.tax)
+        }
+    }
+
     private func exportBalanceSheetPDF() -> URL? {
         let bs = calculator.balanceSheetDetailed()
-        let data = BKReportsPDF.renderBalanceSheet(bs: bs)
+        let range = fyDateRange
+        let pl = calculator.profitAndLoss(start: range.start, end: range.end)
+        let data = BKReportsPDF.renderBalanceSheet(bs: bs, pl: pl, salesRevenue: fySalesRevenue)
         let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
         let url = dir.appendingPathComponent("BalanceSheet.pdf")
         do {
@@ -521,8 +642,10 @@ struct DPBookkeepingView: View {
 
     private func printBalanceSheet() {
         let bs = calculator.balanceSheetDetailed()
-        let data = BKReportsPDF.renderBalanceSheet(bs: bs)
-        dpPrint(data: data, jobName: "Balance Sheet")
+        let range = fyDateRange
+        let pl = calculator.profitAndLoss(start: range.start, end: range.end)
+        let data = BKReportsPDF.renderBalanceSheet(bs: bs, pl: pl, salesRevenue: fySalesRevenue)
+        dpPrint(data: data, jobName: "Balance Sheet & P&L")
     }
 
     private func printJournal() {
