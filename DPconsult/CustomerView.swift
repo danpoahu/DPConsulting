@@ -283,6 +283,25 @@ struct DPCustomerEditor: View {
     @Environment(\.dismiss) private var dismiss
     @Bindable var customer: SDCustomer
 
+    @Query(sort: \SDInvoice.issueDate, order: .reverse) private var allInvoices: [SDInvoice]
+
+    /// Quotes and voided invoices never count toward revenue — same allowlist the
+    /// Reports and A/R Statement use.
+    private static let revenueStatuses: Set<String> = ["sent", "partial", "paid", "billable", "invoice"]
+
+    /// Some invoices carry only customerId rather than the relationship, so match both.
+    private var customerInvoices: [SDInvoice] {
+        allInvoices.filter { inv in
+            let mine = inv.customer?.id == customer.id
+                || (!inv.customerId.isEmpty && inv.customerId == customer.id.uuidString)
+            return mine && Self.revenueStatuses.contains(inv.status.lowercased())
+        }
+    }
+
+    private var billed: Double { customerInvoices.reduce(0) { $0 + $1.total } }
+    private var received: Double { customerInvoices.reduce(0) { $0 + $1.amountPaid } }
+    private var outstanding: Double { billed - received }
+
     @State private var name: String
     @State private var email: String
     @State private var phone: String
@@ -323,6 +342,45 @@ struct DPCustomerEditor: View {
                     Toggle("Active Customer", isOn: $active)
                     Toggle("Web Prospect", isOn: $webProspect)
                 }
+
+                Section("Revenue") {
+                    if customerInvoices.isEmpty {
+                        Text("No invoices yet")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        LabeledContent("Billed", value: billed, format: .currency(code: "USD"))
+                        LabeledContent("Paid", value: received, format: .currency(code: "USD"))
+                        LabeledContent("Outstanding", value: outstanding,
+                                       format: .currency(code: "USD"))
+                            .foregroundStyle(outstanding > 0.005 ? .red : .secondary)
+                    }
+                }
+
+                if !customerInvoices.isEmpty {
+                    Section("Invoices (\(customerInvoices.count))") {
+                        ForEach(customerInvoices) { inv in
+                            HStack(alignment: .firstTextBaseline) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("#\(formatInvoiceNumber(inv.invoiceNumber))")
+                                        .font(.subheadline.weight(.semibold))
+                                    Text(statusLabel(inv.status))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                VStack(alignment: .trailing, spacing: 2) {
+                                    Text(inv.total, format: .currency(code: "USD"))
+                                        .font(.subheadline)
+                                    Text(inv.issueDate,
+                                         format: .dateTime.month(.abbreviated).day().year())
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .padding(.vertical, 2)
+                        }
+                    }
+                }
             }
             .navigationTitle("Edit Customer")
             .toolbar {
@@ -341,6 +399,16 @@ struct DPCustomerEditor: View {
                     }
                 }
             }
+        }
+    }
+
+    private func statusLabel(_ raw: String) -> String {
+        switch raw.lowercased() {
+        case "paid": return "Paid in full"
+        case "partial": return "Partial payment"
+        case "billable": return "Billable"
+        case "sent", "invoice": return "Sent"
+        default: return raw.capitalized
         }
     }
 }
