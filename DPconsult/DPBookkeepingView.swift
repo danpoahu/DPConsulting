@@ -16,6 +16,7 @@ struct DPBookkeepingView: View {
     @State private var selectedTab = 0
     @State private var showingNewAccount = false
     @State private var showingNewEntry = false
+    @State private var showingExpenseImport = false
 
     @State private var journalCSVURL: URL? = nil
     @State private var balanceSheetCSVURL: URL? = nil
@@ -63,7 +64,12 @@ struct DPBookkeepingView: View {
                     case 0:
                         Button("Add Account") { showingNewAccount = true }
                     case 1:
-                        Button("Add Entry") { showingNewEntry = true }
+                        HStack {
+                            Button { showingExpenseImport = true } label: {
+                                Label("Import Expenses", systemImage: "square.and.arrow.down")
+                            }
+                            Button("Add Entry") { showingNewEntry = true }
+                        }
                     case 2:
                         Menu {
                             Section("Print") {
@@ -95,6 +101,10 @@ struct DPBookkeepingView: View {
             }
             .sheet(isPresented: $showingNewAccount) {
                 BKNewAccountView(isPresented: $showingNewAccount)
+                    .presentationSizing(.form)
+            }
+            .sheet(isPresented: $showingExpenseImport) {
+                DPExpenseImportView()
                     .presentationSizing(.form)
             }
             .sheet(isPresented: $showingNewEntry) {
