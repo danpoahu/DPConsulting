@@ -181,6 +181,7 @@ struct DPBillingHomeView: View {
     }
     @State private var activeSheet: ActiveSheet? = nil
     @State private var prospectCount: Int = 0
+    @ObservedObject private var sync = SyncMonitor.shared
 
     private let cols = [GridItem(.flexible(), spacing: 16), GridItem(.flexible(), spacing: 16)]
 
@@ -190,6 +191,8 @@ struct DPBillingHomeView: View {
                 VStack(spacing: 18) {
                     Image("DPLogo").resizable().scaledToFit().frame(width: 140, height: 140).padding(.top, 5)
                     Text("DP Consulting").font(.title.bold()).foregroundColor(Color("TitleColor"))
+
+                    syncWarningBanner()
 
                     LazyVGrid(columns: cols, spacing: 16) {
                         customersTileWithBadge()
@@ -238,6 +241,32 @@ struct DPBillingHomeView: View {
             .onAppear {
                 loadProspectCount()
             }
+        }
+    }
+
+    /// Shown only when iCloud is actually broken. A silent failure here previously
+    /// meant invoices sat unsynced on this Mac for weeks with no indication at all.
+    @ViewBuilder
+    private func syncWarningBanner() -> some View {
+        if sync.isLocalOnlyFallback || sync.lastError != nil {
+            let message = sync.isLocalOnlyFallback
+                ? "iCloud sync is not running. Everything you enter is staying on this device only."
+                : (sync.lastError ?? "")
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "exclamationmark.icloud.fill")
+                    .font(.title3)
+                    .foregroundStyle(.white)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("iCloud sync problem").font(.subheadline.bold())
+                    Text(message).font(.caption)
+                }
+                .foregroundStyle(.white)
+                Spacer(minLength: 0)
+            }
+            .padding(12)
+            .background(Color.red.opacity(0.9), in: RoundedRectangle(cornerRadius: 10))
+            .padding(.horizontal)
+            .accessibilityElement(children: .combine)
         }
     }
 

@@ -30,6 +30,12 @@ struct DPconsultApp: App {
             SDCounter.self
         ])
 
+        // Default iCloud sync ON. `bool(forKey:)` returns false for an unset key, so a
+        // fresh install previously synced nothing until the toggle was found manually —
+        // and the setting is per-device, so every device had to be switched on separately.
+        if UserDefaults.standard.object(forKey: "iCloudSyncEnabled") == nil {
+            UserDefaults.standard.set(true, forKey: "iCloudSyncEnabled")
+        }
         let iCloudEnabled = UserDefaults.standard.bool(forKey: "iCloudSyncEnabled")
 
         // The app is unsandboxed, so SwiftData's default store path resolves to the shared
@@ -59,6 +65,9 @@ struct DPconsultApp: App {
                 do {
                     let c = try ModelContainer(for: schema, configurations: [fallback])
                     DPconsultApp.log.error("ModelContainer fell back to local-only after CloudKit init failure")
+                    // Make the fallback visible in the UI. Previously this was logged
+                    // only, so the app looked normal while saving nothing to iCloud.
+                    SyncMonitor.shared.reportLocalOnlyFallback()
                     return c
                 } catch {
                     fatalError("Could not create ModelContainer (fallback also failed): \(error)")
