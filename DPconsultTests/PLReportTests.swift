@@ -56,16 +56,17 @@ struct PLReportTests {
         #expect(PLPeriod.months(in: 2027, asOf: now, calendar: cal).isEmpty)
     }
 
-    @Test func incomeExcludesQuotesAndVoids() {
+    @Test func incomeIsBilledInvoicesOnly() {
         let sep = PLPeriod.month(year: 2026, month: 9, calendar: cal)
         let figures: [PLIncome.InvoiceFigure] = [
             .init(issueDate: date(2026, 9, 8), status: "sent", amount: 900),
             .init(issueDate: date(2026, 9, 8), status: "Paid", amount: 110),
             .init(issueDate: date(2026, 9, 10), status: "draft", amount: 5000),   // quote
             .init(issueDate: date(2026, 9, 11), status: "void", amount: 300),
-            .init(issueDate: date(2026, 9, 25), status: "billable", amount: 75),
+            .init(issueDate: date(2026, 9, 25), status: "billable", amount: 75),  // in progress, not invoiced
         ]
-        #expect(PLIncome.income(figures, in: sep) == 1085)
+        // Sep 2026 = LDAH #2073 $900 + Marie Borders #2074 $110
+        #expect(PLIncome.income(figures, in: sep) == 1010)
     }
 
     @Test func incomeRespectsMonthEdges() {

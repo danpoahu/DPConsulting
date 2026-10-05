@@ -6,8 +6,9 @@
 //  any single month, each month of a year side by side, or calendar YTD.
 //  Pure — no SwiftData — so it is covered by Swift Testing.
 //
-//  Income = invoices by issue date whose status is earned (Billable, Sent,
-//  Partial, Paid). Quotes and voided invoices are not income. Expenses come
+//  Income = invoices by issue date that have been billed (Sent, Partial, Paid).
+//  Quotes, Billable (work in progress, not yet invoiced) and voided invoices
+//  are not income. Expenses come
 //  from the journal via BKCalculator.profitAndLoss(start:end:).
 //
 
@@ -58,8 +59,10 @@ struct PLPeriod: Equatable, Sendable {
 }
 
 enum PLIncome {
-    /// Invoice statuses that count as earned income. "draft" is a Quote.
-    static let earnedStatuses: Set<String> = ["billable", "invoice", "sent", "partial", "paid"]
+    /// Invoice statuses that count as income: billed invoices only. "draft" is a
+    /// Quote and "billable" is work in progress — neither is income yet.
+    /// "invoice" is the legacy name for Sent.
+    static let earnedStatuses: Set<String> = ["invoice", "sent", "partial", "paid"]
 
     /// Same total the app has always used: guards against an invoice whose
     /// stored total lags its items.

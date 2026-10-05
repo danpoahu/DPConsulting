@@ -437,7 +437,7 @@ struct DPBookkeepingView: View {
         } else {
             plSingle(selectedPLPeriod)
         }
-        Text("Income is invoices by issue date (Billable, Sent, Partial, Paid). Quotes are not income.")
+        Text("Income is billed invoices by issue date (Sent, Partial, Paid). Quotes and Billable (in progress) are not income.")
             .font(.caption).foregroundStyle(.secondary)
     }
 
