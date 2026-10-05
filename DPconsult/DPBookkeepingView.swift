@@ -43,7 +43,8 @@ struct DPBookkeepingView: View {
                 Picker("Select Tab", selection: $selectedTab) {
                     Text("Accounts").tag(0)
                     Text("Journal").tag(1)
-                    Text("Reports").tag(2)
+                    Text("Balance Sheet").tag(2)
+                    Text("P&L").tag(3)
                 }
                 .pickerStyle(.segmented)
                 .padding()
@@ -53,6 +54,7 @@ struct DPBookkeepingView: View {
                     case 0: accountsView
                     case 1: journalView
                     case 2: reportsView
+                    case 3: plView
                     default: EmptyView()
                     }
                 }
@@ -74,7 +76,7 @@ struct DPBookkeepingView: View {
                             }
                             Button("Add Entry") { showingNewEntry = true }
                         }
-                    case 2:
+                    case 2, 3:
                         Menu {
                             Section("Print") {
                                 Button { printBalanceSheet() } label: { Label("Print Balance Sheet", systemImage: "printer") }
@@ -364,7 +366,6 @@ struct DPBookkeepingView: View {
 
                 Divider().padding(.vertical, 10)
 
-                plSection
             }
             .padding(.horizontal)
             .padding(.bottom, 20)
@@ -462,55 +463,80 @@ struct DPBookkeepingView: View {
         }
     }
 
-    /// One column per month of the selected year, plus a YTD total column.
+    /// The P&L tab: its own vertical scroll, no sideways scrolling anywhere
+    /// (a horizontal ScrollView inside a vertical one swallows the scroll wheel on Mac).
+    var plView: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                plSection
+            }
+            .frame(maxWidth: 720, alignment: .leading)
+            .padding(.horizontal)
+            .padding(.bottom, 24)
+            .frame(maxWidth: .infinity)
+        }
+    }
+
+    /// Each Month: one row per month (Income / Expenses / Net), click a month to see
+    /// its expenses by account, then a YTD total row.
     @ViewBuilder
     private var plEachMonthGrid: some View {
         let months = PLPeriod.months(in: plYear)
-        let columns = months.map { plFigures($0) }
         let total = plFigures(.ytd(year: plYear))
-        let expenseAccounts = total.expenses.filter { abs($0.1) >= 0.005 }.map { $0.0 }
-        let fmt: (Double) -> String = { $0.currencyString() }
-        let monthName: (PLPeriod) -> String = { Calendar.current.shortMonthSymbols[Calendar.current.component(.month, from: $0.start) - 1] }
 
-        ScrollView(.horizontal) {
-            Grid(alignment: .trailing, horizontalSpacing: 14, verticalSpacing: 6) {
-                GridRow {
-                    Text("").gridColumnAlignment(.leading)
-                    ForEach(months.indices, id: \.self) { Text(monthName(months[$0])).bold() }
-                    Text("YTD").bold()
-                }
-                Divider()
-                GridRow {
-                    Text("Sales Revenue").bold()
-                    ForEach(columns.indices, id: \.self) { Text(fmt(columns[$0].income)) }
-                    Text(fmt(total.income)).bold()
-                }
-                ForEach(expenseAccounts, id: \.id) { account in
-                    GridRow {
-                        Text(account.name)
-                        ForEach(columns.indices, id: \.self) { i in
-                            Text(fmt(columns[i].expenses.first { $0.0.id == account.id }?.1 ?? 0))
-                        }
-                        Text(fmt(total.expenses.first { $0.0.id == account.id }?.1 ?? 0)).bold()
-                    }
-                }
-                GridRow {
-                    Text("Total Expenses").bold()
-                    ForEach(columns.indices, id: \.self) { Text(fmt(columns[$0].totalExpenses)) }
-                    Text(fmt(total.totalExpenses)).bold()
-                }
-                Divider()
-                GridRow {
-                    Text("Net Profit/Loss").bold()
-                    ForEach(columns.indices, id: \.self) { i in
-                        Text(fmt(columns[i].net)).foregroundColor(columns[i].net >= 0 ? .green : .red)
-                    }
-                    Text(fmt(total.net)).bold().foregroundColor(total.net >= 0 ? .green : .red)
-                }
+        VStack(spacing: 0) {
+            HStack {
+                Text("Month").frame(maxWidth: .infinity, alignment: .leading)
+                Text("Income").frame(width: 110, alignment: .trailing)
+                Text("Expenses").frame(width: 110, alignment: .trailing)
+                Text("Net").frame(width: 110, alignment: .trailing)
             }
-            .font(.subheadline.monospacedDigit())
-            .padding(.vertical, 4)
+            .font(.caption.bold()).foregroundStyle(.secondary)
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            Divider()
+
+            ForEach(months, id: \.start) { period in
+                let f = plFigures(period)
+                DisclosureGroup {
+                    VStack(spacing: 4) {
+                        ForEach(f.expenses.filter { abs($0.1) >= 0.005 }, id: \.0.id) { (account, val) in
+                            HStack {
+                                Text(account.name)
+                                Spacer()
+                                Text(val.currencyString()).monospacedDigit()
+                            }
+                            .font(.caption)
+                        }
+                        if f.expenses.allSatisfy({ abs($0.1) < 0.005 }) {
+                            Text("No expenses").font(.caption).foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                    .padding(.leading, 8).padding(.vertical, 4)
+                } label: {
+                    plMonthRow(Calendar.current.monthSymbols[Calendar.current.component(.month, from: period.start) - 1], f)
+                }
+                .padding(.horizontal, 12).padding(.vertical, 6)
+                Divider()
+            }
+
+            plMonthRow("\(plYear) YTD", total).font(.subheadline.bold())
+                .padding(.horizontal, 12).padding(.vertical, 10)
+                .background(Color.secondary.opacity(0.12))
         }
+        .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func plMonthRow(_ name: String, _ f: PLFigures) -> some View {
+        HStack {
+            Text(name).frame(maxWidth: .infinity, alignment: .leading)
+            Text(f.income.currencyString()).frame(width: 110, alignment: .trailing)
+            Text(f.totalExpenses.currencyString()).frame(width: 110, alignment: .trailing)
+            Text(f.net.currencyString()).frame(width: 110, alignment: .trailing)
+                .foregroundColor(f.net >= 0 ? .green : .red)
+        }
+        .font(.subheadline.monospacedDigit())
     }
 
     // MARK: - PDF Export & Share
