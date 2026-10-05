@@ -23,7 +23,7 @@ enum BKReportsPDF {
         return h
     }
 
-    static func renderBalanceSheet(bs: (assets: [(SDAccount, Double)], liabilities: [(SDAccount, Double)], equity: [(SDAccount, Double)], totals: (assets: Double, liabilities: Double, equity: Double), retainedEarnings: Double), pl: (income: [(SDAccount, Double)], expenses: [(SDAccount, Double)], net: Double)? = nil, salesRevenue: Double = 0) -> Data {
+    static func renderBalanceSheet(bs: (assets: [(SDAccount, Double)], liabilities: [(SDAccount, Double)], equity: [(SDAccount, Double)], totals: (assets: Double, liabilities: Double, equity: Double), retainedEarnings: Double), pl: (income: [(SDAccount, Double)], expenses: [(SDAccount, Double)], net: Double)? = nil, salesRevenue: Double = 0, periodLabel: String = "Year to Date") -> Data {
         let page = CGRect(x: 0, y: 0, width: 612, height: 792) // US Letter 8.5"x11" at 72dpi
         let margin: CGFloat = 36
 
@@ -169,7 +169,7 @@ enum BKReportsPDF {
                 y2 += titleH2 + 18
 
                 let asOf2 = DateFormatter.localizedString(from: Date(), dateStyle: .medium, timeStyle: .none)
-                draw("Fiscal Year to Date", at: CGPoint(x: margin, y: y2), font: small, color: .darkGray)
+                draw(periodLabel, at: CGPoint(x: margin, y: y2), font: small, color: .darkGray)
                 y2 += 14
                 draw("Generated: \(asOf2)", at: CGPoint(x: margin, y: y2), font: small, color: .gray)
                 y2 += 8
@@ -215,7 +215,7 @@ enum BKReportsPDF {
 
                 // Income
                 y2 = sectionHeader("Income", y: y2)
-                y2 = sectionRow(name: "Sales Revenue (Invoices FY YTD)", amount: salesRevenue, y: y2, index: 0)
+                y2 = sectionRow(name: "Sales Revenue (Invoices)", amount: salesRevenue, y: y2, index: 0)
                 let totalIncome = salesRevenue
                 y2 = sectionTotal(label: "Total Income", amount: totalIncome, y: y2 + 6)
 

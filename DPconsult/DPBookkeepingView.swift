@@ -28,6 +28,10 @@ struct DPBookkeepingView: View {
     @State private var showReconcileConfirm = false
     @State private var reconcileMessage = ""
     @State private var showReconcileResult = false
+    // P&L period (Reports tab)
+    @State private var plMode: PLPeriodMode = .month
+    @State private var plYear: Int = Calendar.current.component(.year, from: Date())
+    @State private var plMonth: Int = Calendar.current.component(.month, from: Date())
 
     private var calculator: BKCalculator {
         BKCalculator(accounts: accounts, entries: entries)
@@ -322,23 +326,6 @@ struct DPBookkeepingView: View {
 
     var reportsView: some View {
         ScrollView {
-            let cal = Calendar.current
-            let now = Date()
-            let currentYear = cal.component(.year, from: now)
-            let augFirstThisYear = cal.date(from: DateComponents(year: currentYear, month: 8, day: 1)) ?? now
-            let ytdStart = (now >= augFirstThisYear) ? augFirstThisYear : (cal.date(from: DateComponents(year: currentYear - 1, month: 8, day: 1)) ?? augFirstThisYear)
-
-            let allowedStatuses = Set(["draft", "billable", "invoice", "sent", "partial", "paid"])
-            let fyInvoices = invoices.filter { inv in
-                let inWindow = inv.issueDate >= ytdStart && inv.issueDate <= Date()
-                return inWindow && allowedStatuses.contains(inv.status.lowercased())
-            }
-            let salesFromInvoicesFY: Double = fyInvoices.reduce(0) { sum, inv in
-                let itemsSum = (inv.items ?? []).reduce(0) { $0 + $1.amount }
-                let correctedTotal = max(inv.total, inv.subtotal + inv.tax, itemsSum + inv.tax)
-                return sum + correctedTotal
-            }
-
             VStack(alignment: .leading, spacing: 20) {
                 Text("Balance Sheet").font(.title2).bold().padding(.bottom, 4)
 
@@ -377,37 +364,152 @@ struct DPBookkeepingView: View {
 
                 Divider().padding(.vertical, 10)
 
-                Text("Profit & Loss (YTD)").font(.title2).bold().padding(.bottom, 4)
-
-                let pAndL = calculator.profitAndLoss(start: ytdStart, end: Date())
-
-                Group {
-                    Text("Income").font(.headline)
-                    HStack {
-                        Text("Sales Revenue (Invoices FY YTD)")
-                        Spacer()
-                        Text(salesFromInvoicesFY.currencyString())
-                    }
-                    .font(.subheadline)
-                    Divider()
-                    Text("Expenses").font(.headline)
-                    ForEach(pAndL.expenses, id: \.0.id) { (account, val) in
-                        HStack { Text(account.name); Spacer(); Text(val.currencyString()) }.font(.subheadline)
-                    }
-                    Divider()
-                    HStack {
-                        Text("Net Profit/Loss").font(.headline)
-                        Spacer()
-                        let totalExpenses = pAndL.expenses.reduce(0) { $0 + $1.1 }
-                        let netFY = salesFromInvoicesFY - totalExpenses
-                        Text(netFY.currencyString())
-                            .font(.headline)
-                            .foregroundColor(netFY >= 0 ? .green : .red)
-                    }
-                }
+                plSection
             }
             .padding(.horizontal)
             .padding(.bottom, 20)
+        }
+    }
+
+    // MARK: - Profit & Loss (any month, each month, calendar YTD)
+
+    private var invoiceFigures: [PLIncome.InvoiceFigure] {
+        invoices.map { inv in
+            let itemsSum = (inv.items ?? []).reduce(0) { $0 + $1.amount }
+            return PLIncome.InvoiceFigure(
+                issueDate: inv.issueDate, status: inv.status,
+                amount: PLIncome.invoiceTotal(total: inv.total, subtotal: inv.subtotal, tax: inv.tax, itemsSum: itemsSum))
+        }
+    }
+
+    /// Years that have any invoice or journal entry, always including this year.
+    private var plYears: [Int] {
+        let cal = Calendar.current
+        var years = Set(invoices.map { cal.component(.year, from: $0.issueDate) })
+        years.formUnion(entries.map { cal.component(.year, from: $0.date) })
+        years.insert(cal.component(.year, from: Date()))
+        return years.sorted(by: >)
+    }
+
+    /// The single period shown for Month and YTD, and used for Each Month's total column.
+    private var selectedPLPeriod: PLPeriod {
+        plMode == .month ? .month(year: plYear, month: plMonth) : .ytd(year: plYear)
+    }
+
+    private struct PLFigures {
+        let income: Double
+        let expenses: [(SDAccount, Double)]
+        var totalExpenses: Double { expenses.reduce(0) { $0 + $1.1 } }
+        var net: Double { income - totalExpenses }
+    }
+
+    private func plFigures(_ period: PLPeriod) -> PLFigures {
+        let pl = calculator.profitAndLoss(start: period.start, end: period.end)
+        return PLFigures(income: PLIncome.income(invoiceFigures, in: period), expenses: pl.expenses)
+    }
+
+    @ViewBuilder
+    private var plSection: some View {
+        Text("Profit & Loss").font(.title2).bold()
+
+        Picker("Period", selection: $plMode) {
+            ForEach(PLPeriodMode.allCases) { Text($0.rawValue).tag($0) }
+        }
+        .pickerStyle(.segmented)
+
+        HStack {
+            Picker("Year", selection: $plYear) {
+                ForEach(plYears, id: \.self) { Text(String($0)).tag($0) }
+            }
+            if plMode == .month {
+                Picker("Month", selection: $plMonth) {
+                    ForEach(1...12, id: \.self) { m in
+                        Text(Calendar.current.monthSymbols[m - 1]).tag(m)
+                    }
+                }
+            }
+            Spacer()
+        }
+
+        if plMode == .eachMonth {
+            plEachMonthGrid
+        } else {
+            plSingle(selectedPLPeriod)
+        }
+        Text("Income is invoices by issue date (Billable, Sent, Partial, Paid). Quotes are not income.")
+            .font(.caption).foregroundStyle(.secondary)
+    }
+
+    @ViewBuilder
+    private func plSingle(_ period: PLPeriod) -> some View {
+        let f = plFigures(period)
+        Text(period.label).font(.headline).foregroundStyle(.secondary)
+        Group {
+            Text("Income").font(.headline)
+            HStack { Text("Sales Revenue (Invoices)"); Spacer(); Text(f.income.currencyString()) }.font(.subheadline)
+            Divider()
+            Text("Expenses").font(.headline)
+            ForEach(f.expenses.filter { abs($0.1) >= 0.005 }, id: \.0.id) { (account, val) in
+                HStack { Text(account.name); Spacer(); Text(val.currencyString()) }.font(.subheadline)
+            }
+            HStack { Text("Total Expenses"); Spacer(); Text(f.totalExpenses.currencyString()) }.font(.subheadline.bold())
+            Divider()
+            HStack {
+                Text("Net Profit/Loss").font(.headline)
+                Spacer()
+                Text(f.net.currencyString()).font(.headline).foregroundColor(f.net >= 0 ? .green : .red)
+            }
+        }
+    }
+
+    /// One column per month of the selected year, plus a YTD total column.
+    @ViewBuilder
+    private var plEachMonthGrid: some View {
+        let months = PLPeriod.months(in: plYear)
+        let columns = months.map { plFigures($0) }
+        let total = plFigures(.ytd(year: plYear))
+        let expenseAccounts = total.expenses.filter { abs($0.1) >= 0.005 }.map { $0.0 }
+        let fmt: (Double) -> String = { $0.currencyString() }
+        let monthName: (PLPeriod) -> String = { Calendar.current.shortMonthSymbols[Calendar.current.component(.month, from: $0.start) - 1] }
+
+        ScrollView(.horizontal) {
+            Grid(alignment: .trailing, horizontalSpacing: 14, verticalSpacing: 6) {
+                GridRow {
+                    Text("").gridColumnAlignment(.leading)
+                    ForEach(months.indices, id: \.self) { Text(monthName(months[$0])).bold() }
+                    Text("YTD").bold()
+                }
+                Divider()
+                GridRow {
+                    Text("Sales Revenue").bold()
+                    ForEach(columns.indices, id: \.self) { Text(fmt(columns[$0].income)) }
+                    Text(fmt(total.income)).bold()
+                }
+                ForEach(expenseAccounts, id: \.id) { account in
+                    GridRow {
+                        Text(account.name)
+                        ForEach(columns.indices, id: \.self) { i in
+                            Text(fmt(columns[i].expenses.first { $0.0.id == account.id }?.1 ?? 0))
+                        }
+                        Text(fmt(total.expenses.first { $0.0.id == account.id }?.1 ?? 0)).bold()
+                    }
+                }
+                GridRow {
+                    Text("Total Expenses").bold()
+                    ForEach(columns.indices, id: \.self) { Text(fmt(columns[$0].totalExpenses)) }
+                    Text(fmt(total.totalExpenses)).bold()
+                }
+                Divider()
+                GridRow {
+                    Text("Net Profit/Loss").bold()
+                    ForEach(columns.indices, id: \.self) { i in
+                        Text(fmt(columns[i].net)).foregroundColor(columns[i].net >= 0 ? .green : .red)
+                    }
+                    Text(fmt(total.net)).bold().foregroundColor(total.net >= 0 ? .green : .red)
+                }
+            }
+            .font(.subheadline.monospacedDigit())
+            .padding(.vertical, 4)
         }
     }
 
@@ -529,44 +631,47 @@ struct DPBookkeepingView: View {
     // MARK: - P&L CSV
 
     private func exportPandLCSV() -> URL? {
-        let cal = Calendar.current
-        let now = Date()
-        let currentYear = cal.component(.year, from: now)
-        let augFirstThisYear = cal.date(from: DateComponents(year: currentYear, month: 8, day: 1)) ?? now
-        let ytdStart: Date = (now >= augFirstThisYear) ? augFirstThisYear : (cal.date(from: DateComponents(year: currentYear - 1, month: 8, day: 1)) ?? augFirstThisYear)
-
-        let allowedStatuses = Set(["draft", "billable", "invoice", "sent", "partial", "paid"])
-        let ytdInvoices = invoices.filter { inv in
-            inv.issueDate >= ytdStart && inv.issueDate <= Date() && allowedStatuses.contains(inv.status.lowercased())
-        }
-        var salesFromInvoicesYTD: Double = 0
-        for inv in ytdInvoices {
-            let itemsSum = (inv.items ?? []).reduce(0) { $0 + $1.amount }
-            let correctedTotal = max(inv.total, inv.subtotal + inv.tax, itemsSum + inv.tax)
-            salesFromInvoicesYTD += correctedTotal
-        }
-
         var rows: [[String]] = []
-        rows.append(["INCOME", "", ""])
-        rows.append(["Income", "Sales Revenue (Invoices YTD)", String(format: "%.2f", salesFromInvoicesYTD)])
-        rows.append(["Total Income", "", String(format: "%.2f", salesFromInvoicesYTD)])
-        rows.append(["", "", ""])
-
-        rows.append(["EXPENSES", "", ""])
-        let pl = calculator.profitAndLoss(start: ytdStart, end: Date())
-        for (account, amount) in pl.expenses {
-            rows.append(["Expense", account.name, String(format: "%.2f", amount)])
+        var headers: [String]
+        let money: (Double) -> String = { String(format: "%.2f", $0) }
+        if plMode == .eachMonth {
+            let months = PLPeriod.months(in: plYear)
+            let columns = months.map { plFigures($0) }
+            let total = plFigures(.ytd(year: plYear))
+            let names = months.map { Calendar.current.shortMonthSymbols[Calendar.current.component(.month, from: $0.start) - 1] }
+            headers = ["\(plYear)"] + names + ["YTD"]
+            rows.append(["Sales Revenue (Invoices)"] + columns.map { money($0.income) } + [money(total.income)])
+            for (account, _) in total.expenses where abs(total.expenses.first { $0.0.id == account.id }?.1 ?? 0) >= 0.005 {
+                rows.append([account.name] + columns.map { c in money(c.expenses.first { $0.0.id == account.id }?.1 ?? 0) }
+                            + [money(total.expenses.first { $0.0.id == account.id }?.1 ?? 0)])
+            }
+            rows.append(["Total Expenses"] + columns.map { money($0.totalExpenses) } + [money(total.totalExpenses)])
+            rows.append(["NET INCOME"] + columns.map { money($0.net) } + [money(total.net)])
+        } else {
+            let period = selectedPLPeriod
+            let f = plFigures(period)
+            headers = ["Category", "Account", "Amount"]
+            rows.append(["PERIOD", period.label, ""])
+            rows.append(["", "", ""])
+            rows.append(["INCOME", "", ""])
+            rows.append(["Income", "Sales Revenue (Invoices)", money(f.income)])
+            rows.append(["Total Income", "", money(f.income)])
+            rows.append(["", "", ""])
+            rows.append(["EXPENSES", "", ""])
+            for (account, amount) in f.expenses where abs(amount) >= 0.005 {
+                rows.append(["Expense", account.name, money(amount)])
+            }
+            rows.append(["Total Expenses", "", money(f.totalExpenses)])
+            rows.append(["", "", ""])
+            rows.append(["NET INCOME", "", money(f.net)])
         }
-        let totalExpenses = pl.expenses.reduce(0) { $0 + $1.1 }
-        rows.append(["Total Expenses", "", String(format: "%.2f", totalExpenses)])
-        rows.append(["", "", ""])
-        rows.append(["NET INCOME", "", String(format: "%.2f", salesFromInvoicesYTD - totalExpenses)])
 
         let exporter = JournalCSVExporter()
-        let data = exporter.makeCSV(headers: ["Category", "Account", "Amount"], rows: rows)
+        let data = exporter.makeCSV(headers: headers, rows: rows)
 
         let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-        let url = dir.appendingPathComponent("ProfitAndLoss.csv")
+        let fileTag = plMode == .eachMonth ? "\(plYear)-by-month" : selectedPLPeriod.label.replacingOccurrences(of: " ", with: "-")
+        let url = dir.appendingPathComponent("ProfitAndLoss-\(fileTag).csv")
         do {
             try data.write(to: url, options: .atomic)
             pandlCSVURL = url
@@ -586,32 +691,18 @@ struct DPBookkeepingView: View {
 
     // MARK: - Bookkeeping PDF Exports
 
-    private var fyDateRange: (start: Date, end: Date) {
-        let cal = Calendar.current
-        let now = Date()
-        let currentYear = cal.component(.year, from: now)
-        let augFirstThisYear = cal.date(from: DateComponents(year: currentYear, month: 8, day: 1)) ?? now
-        let ytdStart = (now >= augFirstThisYear) ? augFirstThisYear : (cal.date(from: DateComponents(year: currentYear - 1, month: 8, day: 1)) ?? augFirstThisYear)
-        return (ytdStart, now)
-    }
-
-    private var fySalesRevenue: Double {
-        let range = fyDateRange
-        let allowedStatuses = Set(["draft", "billable", "invoice", "sent", "partial", "paid"])
-        let fyInvoices = invoices.filter { inv in
-            inv.issueDate >= range.start && inv.issueDate <= range.end && allowedStatuses.contains(inv.status.lowercased())
-        }
-        return fyInvoices.reduce(0) { sum, inv in
-            let itemsSum = (inv.items ?? []).reduce(0) { $0 + $1.amount }
-            return sum + max(inv.total, inv.subtotal + inv.tax, itemsSum + inv.tax)
-        }
+    /// Period for the P&L page of the Balance Sheet PDF / print: the one selected
+    /// on the Reports tab (Each Month prints that year's YTD).
+    private var pdfPLPeriod: PLPeriod {
+        plMode == .eachMonth ? .ytd(year: plYear) : selectedPLPeriod
     }
 
     private func exportBalanceSheetPDF() -> URL? {
         let bs = calculator.balanceSheetDetailed()
-        let range = fyDateRange
-        let pl = calculator.profitAndLoss(start: range.start, end: range.end)
-        let data = BKReportsPDF.renderBalanceSheet(bs: bs, pl: pl, salesRevenue: fySalesRevenue)
+        let period = pdfPLPeriod
+        let pl = calculator.profitAndLoss(start: period.start, end: period.end)
+        let data = BKReportsPDF.renderBalanceSheet(bs: bs, pl: pl, salesRevenue: plFigures(period).income,
+                                                   periodLabel: period.label)
         let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
         let url = dir.appendingPathComponent("BalanceSheet.pdf")
         do {
@@ -652,9 +743,10 @@ struct DPBookkeepingView: View {
 
     private func printBalanceSheet() {
         let bs = calculator.balanceSheetDetailed()
-        let range = fyDateRange
-        let pl = calculator.profitAndLoss(start: range.start, end: range.end)
-        let data = BKReportsPDF.renderBalanceSheet(bs: bs, pl: pl, salesRevenue: fySalesRevenue)
+        let period = pdfPLPeriod
+        let pl = calculator.profitAndLoss(start: period.start, end: period.end)
+        let data = BKReportsPDF.renderBalanceSheet(bs: bs, pl: pl, salesRevenue: plFigures(period).income,
+                                                   periodLabel: period.label)
         dpPrint(data: data, jobName: "Balance Sheet & P&L")
     }
 
