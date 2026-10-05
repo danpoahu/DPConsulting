@@ -215,7 +215,7 @@ enum BKReportsPDF {
 
                 // Income
                 y2 = sectionHeader("Income", y: y2)
-                y2 = sectionRow(name: "Sales Revenue (Invoices)", amount: salesRevenue, y: y2, index: 0)
+                y2 = sectionRow(name: "Payments Received (cash basis)", amount: salesRevenue, y: y2, index: 0)
                 let totalIncome = salesRevenue
                 y2 = sectionTotal(label: "Total Income", amount: totalIncome, y: y2 + 6)
 

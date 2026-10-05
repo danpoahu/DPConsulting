@@ -56,32 +56,39 @@ struct PLReportTests {
         #expect(PLPeriod.months(in: 2027, asOf: now, calendar: cal).isEmpty)
     }
 
-    @Test func incomeIsBilledInvoicesOnly() {
-        let sep = PLPeriod.month(year: 2026, month: 9, calendar: cal)
-        let figures: [PLIncome.InvoiceFigure] = [
-            .init(issueDate: date(2026, 9, 8), status: "sent", amount: 900),
-            .init(issueDate: date(2026, 9, 8), status: "Paid", amount: 110),
-            .init(issueDate: date(2026, 9, 10), status: "draft", amount: 5000),   // quote
-            .init(issueDate: date(2026, 9, 11), status: "void", amount: 300),
-            .init(issueDate: date(2026, 9, 25), status: "billable", amount: 75),  // in progress, not invoiced
-        ]
-        // Sep 2026 = LDAH #2073 $900 + Marie Borders #2074 $110
-        #expect(PLIncome.income(figures, in: sep) == 1010)
+    private func payment(_ d: Date, _ amt: Double) -> PLIncome.Entry {
+        .init(date: d, lines: [.init(kind: .cash, debit: amt, credit: 0), .init(kind: .receivable, debit: 0, credit: amt)])
     }
 
-    @Test func incomeRespectsMonthEdges() {
-        let sep = PLPeriod.month(year: 2026, month: 9, calendar: cal)
-        let figures: [PLIncome.InvoiceFigure] = [
-            .init(issueDate: cal.date(from: DateComponents(year: 2026, month: 9, day: 1))!, status: "sent", amount: 1),
-            .init(issueDate: cal.date(from: DateComponents(year: 2026, month: 9, day: 30, hour: 23, minute: 59))!, status: "sent", amount: 2),
-            .init(issueDate: cal.date(from: DateComponents(year: 2026, month: 10, day: 1))!, status: "sent", amount: 4),
-            .init(issueDate: cal.date(from: DateComponents(year: 2026, month: 8, day: 31, hour: 23))!, status: "sent", amount: 8),
+    @Test func cashBasisCountsPaymentInMonthReceived() {
+        // LDAH #2073: August work, invoiced Sep 8, paid Oct 3 -> October income
+        let entries: [PLIncome.Entry] = [
+            .init(date: date(2026, 9, 8), lines: [.init(kind: .receivable, debit: 900, credit: 0), .init(kind: .income, debit: 0, credit: 900)]),
+            payment(date(2026, 10, 3), 900),
         ]
-        #expect(PLIncome.income(figures, in: sep) == 3)
+        #expect(PLIncome.cashReceived(entries, in: .month(year: 2026, month: 9, calendar: cal)) == 0)
+        #expect(PLIncome.cashReceived(entries, in: .month(year: 2026, month: 10, calendar: cal)) == 900)
     }
 
-    @Test func invoiceTotalUsesLargestFigure() {
-        #expect(PLIncome.invoiceTotal(total: 100, subtotal: 100, tax: 0, itemsSum: 120) == 120)
-        #expect(PLIncome.invoiceTotal(total: 150, subtotal: 100, tax: 5, itemsSum: 100) == 150)
+    @Test func cashBasisIgnoresOwnerDepositsAndExpenses() {
+        let entries: [PLIncome.Entry] = [
+            .init(date: date(2026, 9, 1), lines: [.init(kind: .cash, debit: 10_000, credit: 0), .init(kind: .other, debit: 0, credit: 10_000)]),  // owner
+            .init(date: date(2026, 9, 21), lines: [.init(kind: .other, debit: 70, credit: 0), .init(kind: .cash, debit: 0, credit: 70)]),           // Spectrum
+            payment(date(2026, 9, 15), 110),
+        ]
+        #expect(PLIncome.cashReceived(entries, in: .month(year: 2026, month: 9, calendar: cal)) == 110)
+    }
+
+    @Test func cashBasisCountsDirectSales() {
+        let sale = PLIncome.Entry(date: date(2026, 3, 2), lines: [.init(kind: .cash, debit: 50, credit: 0), .init(kind: .income, debit: 0, credit: 50)])
+        #expect(PLIncome.cashReceived([sale], in: .ytd(year: 2026, asOf: date(2026, 10, 5), calendar: cal)) == 50)
+    }
+
+    @Test func cashBasisRespectsMonthEdges() {
+        let entries = [payment(cal.date(from: DateComponents(year: 2026, month: 9, day: 1))!, 1),
+                       payment(cal.date(from: DateComponents(year: 2026, month: 9, day: 30, hour: 23, minute: 59))!, 2),
+                       payment(cal.date(from: DateComponents(year: 2026, month: 10, day: 1))!, 4),
+                       payment(cal.date(from: DateComponents(year: 2026, month: 8, day: 31, hour: 23))!, 8)]
+        #expect(PLIncome.cashReceived(entries, in: .month(year: 2026, month: 9, calendar: cal)) == 3)
     }
 }

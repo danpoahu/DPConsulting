@@ -6,10 +6,10 @@
 //  any single month, each month of a year side by side, or calendar YTD.
 //  Pure — no SwiftData — so it is covered by Swift Testing.
 //
-//  Income = invoices by issue date that have been billed (Sent, Partial, Paid).
-//  Quotes, Billable (work in progress, not yet invoiced) and voided invoices
-//  are not income. Expenses come
-//  from the journal via BKCalculator.profitAndLoss(start:end:).
+//  CASH BASIS (Daniel, 2026-10-05): income is counted in the month the money
+//  was received (Payment received entries), not the invoice date. Expenses come
+//  from the journal via BKCalculator.profitAndLoss(start:end:) and are entered on
+//  the date they were paid, so both sides are cash basis.
 //
 
 import Foundation
@@ -58,29 +58,31 @@ struct PLPeriod: Equatable, Sendable {
     }
 }
 
+/// Cash-basis income: money received in the period.
+///
+/// A journal entry counts when it debits Cash and credits Accounts Receivable
+/// (a payment against an invoice) or an income account (a direct sale). The
+/// amount is the Cash debit. Owner deposits (credit Owners Equity) and transfers
+/// are not income. Expenses are already recorded on the date they were paid.
 enum PLIncome {
-    /// Invoice statuses that count as income: billed invoices only. "draft" is a
-    /// Quote and "billable" is work in progress — neither is income yet.
-    /// "invoice" is the legacy name for Sent.
-    static let earnedStatuses: Set<String> = ["invoice", "sent", "partial", "paid"]
-
-    /// Same total the app has always used: guards against an invoice whose
-    /// stored total lags its items.
-    static func invoiceTotal(total: Double, subtotal: Double, tax: Double, itemsSum: Double) -> Double {
-        max(total, subtotal + tax, itemsSum + tax)
+    struct Line: Sendable {
+        enum Kind: Sendable { case cash, receivable, income, other }
+        let kind: Kind
+        let debit: Double
+        let credit: Double
     }
 
-    struct InvoiceFigure: Sendable {
-        let issueDate: Date
-        let status: String
-        let amount: Double
+    struct Entry: Sendable {
+        let date: Date
+        let lines: [Line]
     }
 
-    static func income(_ invoices: [InvoiceFigure], in period: PLPeriod) -> Double {
-        invoices.reduce(0) { sum, inv in
-            guard inv.issueDate >= period.start, inv.issueDate <= period.end,
-                  earnedStatuses.contains(inv.status.lowercased()) else { return sum }
-            return sum + inv.amount
+    static func cashReceived(_ entries: [Entry], in period: PLPeriod) -> Double {
+        entries.reduce(0) { sum, entry in
+            guard entry.date >= period.start, entry.date <= period.end,
+                  entry.lines.contains(where: { ($0.kind == .receivable || $0.kind == .income) && $0.credit > 0 })
+            else { return sum }
+            return sum + entry.lines.filter { $0.kind == .cash }.reduce(0) { $0 + $1.debit - $1.credit }
         }
     }
 }

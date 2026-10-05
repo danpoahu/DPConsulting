@@ -374,12 +374,20 @@ struct DPBookkeepingView: View {
 
     // MARK: - Profit & Loss (any month, each month, calendar YTD)
 
-    private var invoiceFigures: [PLIncome.InvoiceFigure] {
-        invoices.map { inv in
-            let itemsSum = (inv.items ?? []).reduce(0) { $0 + $1.amount }
-            return PLIncome.InvoiceFigure(
-                issueDate: inv.issueDate, status: inv.status,
-                amount: PLIncome.invoiceTotal(total: inv.total, subtotal: inv.subtotal, tax: inv.tax, itemsSum: itemsSum))
+    /// Journal entries reduced to what cash-basis income needs.
+    private var plEntries: [PLIncome.Entry] {
+        let kinds: [UUID: PLIncome.Line.Kind] = Dictionary(uniqueKeysWithValues: accounts.map { acct in
+            let kind: PLIncome.Line.Kind
+            if acct.type == .income { kind = .income }
+            else if acct.type == .asset && acct.name == "Cash" { kind = .cash }
+            else if acct.type == .asset && acct.name == "Accounts Receivable" { kind = .receivable }
+            else { kind = .other }
+            return (acct.id, kind)
+        })
+        return entries.map { entry in
+            PLIncome.Entry(date: entry.date, lines: (entry.lines ?? []).map {
+                PLIncome.Line(kind: kinds[$0.accountId] ?? .other, debit: $0.debit, credit: $0.credit)
+            })
         }
     }
 
@@ -406,7 +414,7 @@ struct DPBookkeepingView: View {
 
     private func plFigures(_ period: PLPeriod) -> PLFigures {
         let pl = calculator.profitAndLoss(start: period.start, end: period.end)
-        return PLFigures(income: PLIncome.income(invoiceFigures, in: period), expenses: pl.expenses)
+        return PLFigures(income: PLIncome.cashReceived(plEntries, in: period), expenses: pl.expenses)
     }
 
     @ViewBuilder
@@ -437,7 +445,7 @@ struct DPBookkeepingView: View {
         } else {
             plSingle(selectedPLPeriod)
         }
-        Text("Income is billed invoices by issue date (Sent, Partial, Paid). Quotes and Billable (in progress) are not income.")
+        Text("Cash basis: income is counted when payment is received (Payment received entries); expenses when paid.")
             .font(.caption).foregroundStyle(.secondary)
     }
 
@@ -447,7 +455,7 @@ struct DPBookkeepingView: View {
         Text(period.label).font(.headline).foregroundStyle(.secondary)
         Group {
             Text("Income").font(.headline)
-            HStack { Text("Sales Revenue (Invoices)"); Spacer(); Text(f.income.currencyString()) }.font(.subheadline)
+            HStack { Text("Payments Received"); Spacer(); Text(f.income.currencyString()) }.font(.subheadline)
             Divider()
             Text("Expenses").font(.headline)
             ForEach(f.expenses.filter { abs($0.1) >= 0.005 }, id: \.0.id) { (account, val) in
@@ -666,7 +674,7 @@ struct DPBookkeepingView: View {
             let total = plFigures(.ytd(year: plYear))
             let names = months.map { Calendar.current.shortMonthSymbols[Calendar.current.component(.month, from: $0.start) - 1] }
             headers = ["\(plYear)"] + names + ["YTD"]
-            rows.append(["Sales Revenue (Invoices)"] + columns.map { money($0.income) } + [money(total.income)])
+            rows.append(["Payments Received"] + columns.map { money($0.income) } + [money(total.income)])
             for (account, _) in total.expenses where abs(total.expenses.first { $0.0.id == account.id }?.1 ?? 0) >= 0.005 {
                 rows.append([account.name] + columns.map { c in money(c.expenses.first { $0.0.id == account.id }?.1 ?? 0) }
                             + [money(total.expenses.first { $0.0.id == account.id }?.1 ?? 0)])
@@ -680,7 +688,7 @@ struct DPBookkeepingView: View {
             rows.append(["PERIOD", period.label, ""])
             rows.append(["", "", ""])
             rows.append(["INCOME", "", ""])
-            rows.append(["Income", "Sales Revenue (Invoices)", money(f.income)])
+            rows.append(["Income", "Payments Received (cash basis)", money(f.income)])
             rows.append(["Total Income", "", money(f.income)])
             rows.append(["", "", ""])
             rows.append(["EXPENSES", "", ""])
