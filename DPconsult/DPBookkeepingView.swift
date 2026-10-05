@@ -17,6 +17,7 @@ struct DPBookkeepingView: View {
     @State private var showingNewAccount = false
     @State private var showingNewEntry = false
     @State private var showingExpenseImport = false
+    @State private var editingEntry: SDJournalEntry? = nil
 
     @State private var journalCSVURL: URL? = nil
     @State private var balanceSheetCSVURL: URL? = nil
@@ -107,6 +108,10 @@ struct DPBookkeepingView: View {
             }
             .sheet(isPresented: $showingNewAccount) {
                 BKNewAccountView(isPresented: $showingNewAccount)
+                    .presentationSizing(.form)
+            }
+            .sheet(item: $editingEntry) { entry in
+                BKEditEntryView(entry: entry)
                     .presentationSizing(.form)
             }
             .sheet(isPresented: $showingExpenseImport) {
@@ -306,6 +311,11 @@ struct DPBookkeepingView: View {
                     }
                 }
                 .padding(.vertical, 6)
+                .contentShape(Rectangle())
+                .onTapGesture { editingEntry = entry }
+                .contextMenu {
+                    Button { editingEntry = entry } label: { Label("Edit Date & Memo\u{2026}", systemImage: "calendar") }
+                }
             }
             // Retained Earnings (all time)
             VStack(alignment: .leading, spacing: 4) {
@@ -836,6 +846,70 @@ struct BKNewAccountView: View {
                     Button("Cancel") { isPresented = false }
                 }
             }
+        }
+    }
+}
+
+// MARK: - Edit Entry (date + memo only)
+
+/// Changes only an entry's date and memo — amounts and accounts are left alone,
+/// so the books stay balanced. Used to move a payment to the month the money
+/// actually arrived (cash-basis P&L reads the entry date).
+struct BKEditEntryView: View {
+    @Environment(\.modelContext) private var modelContext
+    @Environment(\.dismiss) private var dismiss
+    let entry: SDJournalEntry
+
+    @State private var date: Date = Date()
+    @State private var memo: String = ""
+    @State private var errorMessage: String?
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Date") {
+                    DatePicker("Entry Date", selection: $date, displayedComponents: .date)
+                    Text("Was \(entry.date.formatted(date: .long, time: .omitted))")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Section("Memo") {
+                    TextField("Memo", text: $memo)
+                }
+                Section("Lines (not changed)") {
+                    ForEach(entry.sortedLines) { line in
+                        HStack {
+                            Text(line.memo.isEmpty ? "Line" : line.memo).font(.caption)
+                            Spacer()
+                            Text(line.debit > 0 ? "Dr \(line.debit.currencyString())" : "Cr \(line.credit.currencyString())")
+                                .font(.caption.monospacedDigit())
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Edit Entry")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) { Button("Save") { save() } }
+            }
+            .onAppear { date = entry.date; memo = entry.memo }
+            .alert("Could not save", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
+                Button("OK", role: .cancel) { errorMessage = nil }
+            } message: { Text(errorMessage ?? "") }
+        }
+    }
+
+    private func save() {
+        // Keep local noon so the day doesn't shift between time zones/devices.
+        let cal = Calendar.current
+        let day = cal.dateComponents([.year, .month, .day], from: date)
+        entry.date = cal.date(from: DateComponents(year: day.year, month: day.month, day: day.day, hour: 12)) ?? date
+        entry.memo = memo
+        entry.updatedAt = Date()
+        do {
+            try modelContext.save()
+            dismiss()
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 }
