@@ -37,7 +37,9 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
                      fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void) {
         let notification = CKNotification(fromRemoteNotificationDictionary: userInfo)
 
-        if notification?.subscriptionID == "web-prospect-new" {
+        // Contact-form prospects and quote requests both import through the same notification.
+        if notification?.subscriptionID == "web-prospect-new"
+            || notification?.subscriptionID == QuoteRequestService.subscriptionID {
             NotificationCenter.default.post(name: .newWebProspectReceived, object: nil)
             completionHandler(.newData)
         } else {

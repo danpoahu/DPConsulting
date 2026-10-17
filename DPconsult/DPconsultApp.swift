@@ -89,17 +89,20 @@ struct DPconsultApp: App {
                     }
                     Task {
                         await WebProspectService.shared.registerSubscription()
+                        await QuoteRequestService.shared.registerSubscription()
                         let ctx = ModelContext(sharedModelContainer)
                         let count = await WebProspectService.shared.importProspects(into: ctx)
                         if count > 0 {
                             print("[WebProspect] Imported \(count) new prospects")
                         }
+                        _ = await QuoteRequestService.shared.importRequests(into: ctx)
                     }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .newWebProspectReceived)) { _ in
                     Task {
                         let ctx = ModelContext(sharedModelContainer)
                         _ = await WebProspectService.shared.importProspects(into: ctx)
+                        _ = await QuoteRequestService.shared.importRequests(into: ctx)
                     }
                 }
                 .sheet(isPresented: $showSyncPrompt) {

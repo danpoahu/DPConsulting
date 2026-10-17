@@ -76,12 +76,14 @@ struct DPCustomersListView: View {
                                 Text(c.name).font(.headline)
                                 Spacer()
                                 if c.webProspect {
-                                    Text("PROSPECT")
+                                    // Quote requests from oahuappdesign.com/quote/ start their notes with the proposal.
+                                    let isQuote = c.notes.hasPrefix(QuoteRequestService.header)
+                                    Text(isQuote ? "QUOTE" : "PROSPECT")
                                         .font(.caption.bold())
                                         .foregroundColor(.white)
                                         .padding(.horizontal, 8)
                                         .padding(.vertical, 2)
-                                        .background(.orange)
+                                        .background(isQuote ? .blue : .orange)
                                         .clipShape(Capsule())
                                 }
                                 if !c.active {
@@ -201,7 +203,12 @@ struct DPCustomersListView: View {
             }
             .sheet(item: $quotingCustomer) { c in
                 NavigationStack {
-                    DPInvoicingView(customer: c)
+                    // A web quote request in the notes pre-fills the quote from its proposal.
+                    if let seed = QuoteDraftSeed.parse(c.notes) {
+                        DPInvoicingView(customer: c, seedItems: seed.invoiceItems, seedNotes: seed.title)
+                    } else {
+                        DPInvoicingView(customer: c)
+                    }
                 }
                 .presentationSizing(.form)
             }
@@ -336,7 +343,7 @@ struct DPCustomerEditor: View {
                 }
                 Section("Notes") {
                     TextEditor(text: $notes)
-                        .frame(minHeight: 60)
+                        .frame(minHeight: notes.count > 400 ? 360 : 60) // room for a quote proposal
                 }
                 Section("Status") {
                     Toggle("Active Customer", isOn: $active)
