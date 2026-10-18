@@ -11,6 +11,7 @@
 import CloudKit
 import OSLog
 import SwiftData
+import UserNotifications
 
 @MainActor
 final class QuoteRequestService {
@@ -104,6 +105,8 @@ final class QuoteRequestService {
     }
 
     // MARK: - Push notification when a draft is ready
+    // Not called: Production refuses new subscriptions (Apple server issue, May 2026).
+    // The app polls instead (DPconsultApp.importWebLeads). Kept for when Apple fixes it.
 
     func registerSubscription() async {
         let subscription = CKQuerySubscription(
@@ -152,6 +155,26 @@ final class QuoteRequestService {
             lines += answers.filter { !$0.value.isEmpty }.sorted { $0.key < $1.key }.map { "• \($0.key): \($0.value)" }
         }
         return lines.joined(separator: "\n")
+    }
+}
+
+// MARK: - Local notification
+
+/// Posts the "new web lead" alert from the app itself, since CloudKit push isn't available.
+enum WebLeadNotifier {
+    static func post(prospects: Int, quotes: Int, badge: Int) {
+        let content = UNMutableNotificationContent()
+        if quotes > 0 {
+            content.title = quotes == 1 ? "New Quote Request" : "\(quotes) New Quote Requests"
+            content.body = "A proposal draft is ready to review in Customers."
+        } else {
+            content.title = prospects == 1 ? "New Web Prospect" : "\(prospects) New Web Prospects"
+            content.body = "Someone submitted the contact form."
+        }
+        content.sound = .default
+        content.badge = NSNumber(value: badge)
+        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request)
     }
 }
 

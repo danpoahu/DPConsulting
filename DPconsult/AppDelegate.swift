@@ -57,5 +57,7 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
 
 extension Notification.Name {
     static let newWebProspectReceived = Notification.Name("newWebProspectReceived")
+    /// Posted after new web leads land in SwiftData, so badges refresh.
+    static let webLeadsImported = Notification.Name("webLeadsImported")
 }
 

@@ -905,6 +905,9 @@ struct DPInvoicesListView: View {
     @State private var editorRoute: EditorRoute?
     @State private var showImportSheet = false
     @State private var pendingSeed: DPImportSeed?
+    /// New work summaries in the Reports folder, and the one being imported.
+    @State private var inbox: [URL] = []
+    @State private var inboxURL: URL?
     @State private var error: String?
     @State private var searchText = ""
     @State private var markPaidInvoice: SDInvoice?
@@ -927,6 +930,34 @@ struct DPInvoicesListView: View {
         NavigationStack {
             List {
                 if let error { Text(error).foregroundStyle(.red) }
+
+                ForEach(inbox, id: \.self) { url in
+                    HStack(spacing: 12) {
+                        Image(systemName: "tray.and.arrow.down.fill").foregroundStyle(.white)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("New work summary ready").font(.subheadline.bold())
+                            Text(BillingSummaryInbox.displayName(url)).font(.caption)
+                        }
+                        .foregroundStyle(.white)
+                        Spacer()
+                        Button("Open") {
+                            inboxURL = url
+                            showImportSheet = true
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.white)
+                        .foregroundStyle(.blue)
+                        Button {
+                            BillingSummaryInbox.markHandled(url)
+                            inbox = BillingSummaryInbox.pending()
+                        } label: { Image(systemName: "xmark") }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.white.opacity(0.8))
+                        .help("Dismiss without importing")
+                    }
+                    .padding(.vertical, 4)
+                    .listRowBackground(Color.blue)
+                }
 
                 Picker("Filter", selection: $filter) {
                     ForEach(Filter.allCases) { f in Text(f.title).tag(f) }
@@ -983,6 +1014,7 @@ struct DPInvoicesListView: View {
             }
             .searchable(text: $searchText, prompt: "Search by customer or invoice #")
             .navigationTitle("DP Invoices")
+            .onAppear { inbox = BillingSummaryInbox.pending() }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } }
                 ToolbarItem(placement: .topBarTrailing) {
@@ -1013,13 +1045,16 @@ struct DPInvoicesListView: View {
                 .presentationSizing(.form)
             }
             .sheet(isPresented: $showImportSheet) {
-                DPBillingImportView { seed in pendingSeed = seed }
+                DPBillingImportView(preloadURL: inboxURL) { seed in pendingSeed = seed }
                     .presentationSizing(.form)
             }
             // Open the editor only once the import sheet has finished dismissing,
             // so the two sheets never contend.
             .onChange(of: showImportSheet) { _, isShowing in
-                guard !isShowing, let seed = pendingSeed else { return }
+                guard !isShowing else { return }
+                inboxURL = nil
+                inbox = BillingSummaryInbox.pending()
+                guard let seed = pendingSeed else { return }
                 pendingSeed = nil
                 editorRoute = .seeded(seed)
             }

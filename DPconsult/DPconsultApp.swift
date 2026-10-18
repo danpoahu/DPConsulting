@@ -89,21 +89,11 @@ struct DPconsultApp: App {
                     }
                     Task {
                         await WebProspectService.shared.registerSubscription()
-                        await QuoteRequestService.shared.registerSubscription()
-                        let ctx = ModelContext(sharedModelContainer)
-                        let count = await WebProspectService.shared.importProspects(into: ctx)
-                        if count > 0 {
-                            print("[WebProspect] Imported \(count) new prospects")
-                        }
-                        _ = await QuoteRequestService.shared.importRequests(into: ctx)
+                        await importWebLeads()
                     }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .newWebProspectReceived)) { _ in
-                    Task {
-                        let ctx = ModelContext(sharedModelContainer)
-                        _ = await WebProspectService.shared.importProspects(into: ctx)
-                        _ = await QuoteRequestService.shared.importRequests(into: ctx)
-                    }
+                    Task { await importWebLeads() }
                 }
                 .sheet(isPresented: $showSyncPrompt) {
                     iCloudSyncPromptView(
@@ -127,6 +117,12 @@ struct DPconsultApp: App {
                 }
                 .onChange(of: scenePhase) { oldPhase, newPhase in
                     handleScenePhaseChange(from: oldPhase, to: newPhase)
+                }
+                // Apple won't create new CloudKit subscriptions in Production (known server
+                // issue, forums thread 826814, May 2026), so web leads can't rely on push.
+                // While the app is open it checks every 10 minutes instead.
+                .onReceive(Timer.publish(every: 600, on: .main, in: .common).autoconnect()) { _ in
+                    Task { await importWebLeads() }
                 }
         }
         .modelContainer(sharedModelContainer)
@@ -171,6 +167,28 @@ struct DPconsultApp: App {
         let customers = (try? ctx.fetchCount(FetchDescriptor<SDCustomer>())) ?? -1
         let invoices = (try? ctx.fetchCount(FetchDescriptor<SDInvoice>())) ?? -1
         DPconsultApp.log.info("on .active: customers=\(customers) invoices=\(invoices)")
+        Task { await importWebLeads() }
+    }
+
+    /// Contact-form prospects and quote requests from oahuappdesign.com. Anything new
+    /// gets a Mac notification and refreshes the home-screen badges.
+    @MainActor private static var importingWebLeads = false
+
+    @MainActor
+    private func importWebLeads() async {
+        // The timer, the push handler and scene activation can overlap; two runs at
+        // once would both import the same request before either saves.
+        guard !Self.importingWebLeads else { return }
+        Self.importingWebLeads = true
+        defer { Self.importingWebLeads = false }
+        let ctx = ModelContext(sharedModelContainer)
+        let prospects = await WebProspectService.shared.importProspects(into: ctx)
+        let quotes = await QuoteRequestService.shared.importRequests(into: ctx)
+        guard prospects + quotes > 0 else { return }
+        DPconsultApp.log.info("Imported web leads: prospects=\(prospects) quotes=\(quotes)")
+        let waiting = (try? ctx.fetchCount(FetchDescriptor<SDCustomer>(predicate: #Predicate { $0.webProspect }))) ?? 0
+        WebLeadNotifier.post(prospects: prospects, quotes: quotes, badge: waiting)
+        NotificationCenter.default.post(name: .webLeadsImported, object: nil)
     }
 
 }

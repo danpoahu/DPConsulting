@@ -181,6 +181,8 @@ struct DPBillingHomeView: View {
     }
     @State private var activeSheet: ActiveSheet? = nil
     @State private var prospectCount: Int = 0
+    @State private var summaryCount: Int = 0
+    @Environment(\.scenePhase) private var scenePhase
     @ObservedObject private var sync = SyncMonitor.shared
 
     private let cols = [GridItem(.flexible(), spacing: 16), GridItem(.flexible(), spacing: 16)]
@@ -197,7 +199,7 @@ struct DPBillingHomeView: View {
                     LazyVGrid(columns: cols, spacing: 16) {
                         customersTileWithBadge()
                         tile("Services", "wrench.adjustable.fill", .services)
-                        tile("Invoicing", "doc.text", .invoicing)
+                        tile("Invoicing", "doc.text", .invoicing, badge: summaryCount)
                         tile("A/R", "dollarsign.circle", .accountsReceivable)
                         tile("Time", "timer", .time)
                         tile("Reports", "chart.bar.doc.horizontal", .reports)
@@ -237,9 +239,20 @@ struct DPBillingHomeView: View {
                 if oldValue == .customers, newValue == nil {
                     loadProspectCount()
                 }
+                if oldValue == .invoicing, newValue == nil {
+                    summaryCount = BillingSummaryInbox.pending().count
+                }
             }
             .onAppear {
                 loadProspectCount()
+                summaryCount = BillingSummaryInbox.pending().count
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .webLeadsImported)) { _ in
+                loadProspectCount()
+            }
+            .onChange(of: scenePhase) { _, phase in
+                // A summary written while the app sat in the background badges on return.
+                if phase == .active { summaryCount = BillingSummaryInbox.pending().count }
             }
         }
     }
@@ -271,10 +284,22 @@ struct DPBillingHomeView: View {
     }
 
     @ViewBuilder
-    private func tile(_ title: String, _ sys: String, _ sheet: ActiveSheet) -> some View {
+    private func tile(_ title: String, _ sys: String, _ sheet: ActiveSheet, badge: Int = 0) -> some View {
         Button { activeSheet = sheet } label: {
             VStack(spacing: 10) {
-                Image(systemName: sys).font(.system(size: 30, weight: .semibold))
+                ZStack(alignment: .topTrailing) {
+                    Image(systemName: sys).font(.system(size: 30, weight: .semibold))
+                    if badge > 0 {
+                        Text("\(badge)")
+                            .font(.caption.bold())
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(.red)
+                            .clipShape(Capsule())
+                            .offset(x: 12, y: -8)
+                    }
+                }
                 Text(title).font(.headline)
             }
             .frame(maxWidth: .infinity, minHeight: 110)

@@ -522,9 +522,12 @@ struct DPBillingImportView: View {
     @Environment(\.dismiss) private var dismiss
     @Query(sort: \SDCustomer.name) private var customers: [SDCustomer]
 
+    /// A summary found in the Reports folder (BillingSummaryInbox): loaded on open, no file picker.
+    var preloadURL: URL? = nil
     let onCreate: (DPImportSeed) -> Void
 
     @State private var showFileImporter = false
+    @State private var loadedURL: URL?
     @State private var fileName: String = ""
     @State private var summaryTitle: String = ""
     @State private var statedTotalHours: Double?
@@ -570,6 +573,9 @@ struct DPBillingImportView: View {
                 }
             }
             .navigationTitle("Import Summary")
+            .onAppear {
+                if let preloadURL, weeks.isEmpty { load(preloadURL) }
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -755,6 +761,7 @@ struct DPBillingImportView: View {
 
         do {
             apply(try BillingSummaryParser.parse(html), fileName: url.lastPathComponent)
+            loadedURL = url
         } catch {
             importLog.error("Parse failed for \(url.lastPathComponent, privacy: .public)")
             errorMessage = error.errorDescription
@@ -785,6 +792,7 @@ struct DPBillingImportView: View {
         importLog.info("Import created \(items.count, privacy: .public) line items, discount \(self.totals.discount, privacy: .public)")
 
         onCreate(DPImportSeed(customer: customer, items: items, notes: invoiceNotes))
+        if let loadedURL { BillingSummaryInbox.markHandled(loadedURL) }
         dismiss()
     }
 }
