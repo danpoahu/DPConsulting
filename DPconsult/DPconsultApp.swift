@@ -89,6 +89,8 @@ struct DPconsultApp: App {
                     }
                     Task {
                         OneTimeCleanup.run(sharedModelContainer.mainContext)
+                        LeadActivityService.start()
+                        LeadActivityService.endAll()
                         await WebProspectService.shared.registerSubscription()
                         await importWebLeads()
                     }
@@ -168,6 +170,7 @@ struct DPconsultApp: App {
         let customers = (try? ctx.fetchCount(FetchDescriptor<SDCustomer>())) ?? -1
         let invoices = (try? ctx.fetchCount(FetchDescriptor<SDInvoice>())) ?? -1
         DPconsultApp.log.info("on .active: customers=\(customers) invoices=\(invoices)")
+        LeadActivityService.endAll() // Dan has opened the app, so the lead cards have done their job
         Task { await importWebLeads() }
     }
 
