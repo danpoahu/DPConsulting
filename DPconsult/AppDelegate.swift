@@ -29,7 +29,14 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
 
     func application(_ application: UIApplication,
                      didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
-        // CloudKit subscriptions use APNs under the hood; no manual token handling needed
+        // CloudKit subscriptions use APNs under the hood. The token also goes to the
+        // website worker so it can push new web leads directly (iPhone/iPad only).
+        Task { @MainActor in PushDeviceService.register(token: deviceToken) }
+    }
+
+    func application(_ application: UIApplication,
+                     didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        print("[Push] Registration failed: \(error.localizedDescription)")
     }
 
     func application(_ application: UIApplication,
