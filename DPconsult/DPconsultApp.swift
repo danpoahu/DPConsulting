@@ -94,7 +94,7 @@ struct DPconsultApp: App {
                     }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .newWebProspectReceived)) { _ in
-                    Task { await importWebLeads() }
+                    Task { await importWebLeads(manual: true) } // Refresh button or push
                 }
                 .sheet(isPresented: $showSyncPrompt) {
                     iCloudSyncPromptView(
@@ -176,7 +176,13 @@ struct DPconsultApp: App {
     @MainActor private static var importingWebLeads = false
 
     @MainActor
-    private func importWebLeads() async {
+    private func importWebLeads(manual: Bool = false) async {
+        // Automatic checks run on the Mac only. If the iPhone and iPad polled too, two
+        // devices could import the same request before either marks it processed, and
+        // iCloud would sync both copies. They get the result through sync instead.
+        #if !targetEnvironment(macCatalyst)
+        guard manual else { return }
+        #endif
         // The timer, the push handler and scene activation can overlap; two runs at
         // once would both import the same request before either saves.
         guard !Self.importingWebLeads else { return }
