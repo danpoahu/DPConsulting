@@ -88,6 +88,7 @@ struct DPconsultApp: App {
                         showSyncPrompt = true
                     }
                     Task {
+                        OneTimeCleanup.run(sharedModelContainer.mainContext)
                         await WebProspectService.shared.registerSubscription()
                         await importWebLeads()
                     }

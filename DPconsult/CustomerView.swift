@@ -152,7 +152,7 @@ struct DPCustomersListView: View {
                     }
                     .padding(.vertical, 2)
                     .swipeActions(edge: .trailing) {
-                        if !c.active && canDelete(c) {
+                        if canDeleteNow(c) {
                             Button(role: .destructive) {
                                 deleteTarget = c
                                 showDeleteConfirm = true
@@ -160,11 +160,20 @@ struct DPCustomersListView: View {
                                 Label("Delete", systemImage: "trash")
                             }
                         }
+                        if c.webProspect {
+                            Button { markReviewed(c) } label: {
+                                Label("Reviewed", systemImage: "checkmark.circle")
+                            }
+                            .tint(.blue)
+                        }
                     }
                     .contextMenu {
                         Button { editing = c } label: { Label("Edit", systemImage: "pencil") }
                         Button { quotingCustomer = c } label: { Label("New Quote", systemImage: "doc.text") }
-                        if !c.active && canDelete(c) {
+                        if c.webProspect {
+                            Button { markReviewed(c) } label: { Label("Mark Reviewed", systemImage: "checkmark.circle") }
+                        }
+                        if canDeleteNow(c) {
                             Divider()
                             Button(role: .destructive) {
                                 deleteTarget = c
@@ -178,6 +187,13 @@ struct DPCustomersListView: View {
             .navigationTitle(showArchived ? "Archived Customers" : "DP Customers")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } }
+                ToolbarItem(placement: .topBarTrailing) {
+                    // Check the website for new contact messages and quote requests now.
+                    Button {
+                        NotificationCenter.default.post(name: .newWebProspectReceived, object: nil)
+                    } label: { Image(systemName: "arrow.clockwise") }
+                    .help("Check for new web leads")
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { printCustomerList() } label: { Image(systemName: "printer") }
                 }
@@ -230,6 +246,24 @@ struct DPCustomersListView: View {
         !allInvoices.contains { inv in
             inv.customer?.id == c.id && inv.status.lowercased() == "paid"
         }
+    }
+
+    /// Archived customers keep the old rule (no paid invoices). Active ones, such as a
+    /// web lead that went nowhere, can go only while they have nothing but quotes,
+    /// drafts or voids, so nothing that touched the books disappears.
+    private func canDeleteNow(_ c: SDCustomer) -> Bool {
+        if !c.active { return canDelete(c) }
+        return !allInvoices.contains { inv in
+            inv.customer?.id == c.id && !["draft", "quote", "void"].contains(inv.status.lowercased())
+        }
+    }
+
+    /// Clears the PROSPECT/QUOTE pill and the badge without changing anything else.
+    private func markReviewed(_ c: SDCustomer) {
+        c.webProspect = false
+        c.updatedAt = Date()
+        try? modelContext.save()
+        WebProspectService.shared.clearBadge()
     }
 
     private func deleteCustomer(_ c: SDCustomer) {
